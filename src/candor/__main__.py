@@ -28,7 +28,10 @@ def _memory(args: argparse.Namespace) -> None:
     with out_path.open("w", encoding="utf-8") as handle:
         for item in questions:
             as_of = datetime.fromisoformat(item["as_of"])
-            ranked = retrieve(corpus, item["question"], as_of, stem=stem)
+            ranked = retrieve(
+                corpus, item["question"], as_of,
+                stem=stem, chain_width=args.chain_width, parent_cap=args.parent_cap,
+            )
             answer, sources, abstained = placeholder(ranked)
             answer = redact(answer)
             if has_key_shape(answer):
@@ -59,6 +62,8 @@ def main() -> None:
     memory.add_argument("--questions", required=True)
     memory.add_argument("--out", required=True)
     memory.add_argument("--lexical", choices=("plain", "stem"), default="stem")
+    memory.add_argument("--chain-width", type=int, default=3)
+    memory.add_argument("--parent-cap", type=int, default=3)
     memory.set_defaults(func=_memory)
 
     report = sub.add_parser("report", help="per-question retrieval failures against a gold file")

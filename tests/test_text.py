@@ -32,6 +32,14 @@ class TextTests(unittest.TestCase):
         self.assertIn("slip", slip)
         self.assertNotIn("slip", move)
 
+    def test_proposal_and_flight_join(self):
+        proposed = set(analyze("the proposal we proposed", stem=True))
+        propose = set(analyze("we propose", stem=True))
+        self.assertTrue(propose <= proposed)
+        self.assertIn("flight", set(analyze("the flight", stem=True)))
+        self.assertIn("flight", set(analyze("we fly", stem=True)))
+        self.assertIn("flight", set(analyze("flying out", stem=True)))
+
     def test_dates_and_amounts_stay_whole(self):
         tokens = analyze("p95 was 1.8 and the fee is $18 on 10/21", stem=True)
         self.assertIn("1.8", tokens)

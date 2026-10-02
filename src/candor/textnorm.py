@@ -26,6 +26,10 @@ _GROUPS = {
     "own": ["own", "assign"],
     "cancel": ["cancel"],
     "sign": ["sign"],
+    "propose": ["propose", "proposal", "proposed"],
+    "flight": ["fly", "flight", "flying"],
+    "dictate": ["dictate", "dictation", "dictated"],
+    "contract": ["contract", "agreement"],
 }
 
 
