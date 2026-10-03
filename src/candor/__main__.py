@@ -9,10 +9,12 @@ from pathlib import Path
 
 from candor.actions import plan
 from candor.answer import compose
+from candor.explain import explain_text
 from candor.ingest import load_corpus
 from candor.redact import has_key_shape, redact
 from candor.report import write_failure_report
 from candor.retrieve import retrieve
+from candor.serve import serve
 
 
 def _load_jsonl(path: Path) -> list[dict]:
@@ -63,6 +65,18 @@ def _actions(args: argparse.Namespace) -> None:
     print(f"wrote {len(commands)} action plans to {out_path}")
 
 
+def _explain(args: argparse.Namespace) -> None:
+    corpus = load_corpus(args.data)
+    text = explain_text(corpus, args.question, datetime.fromisoformat(args.as_of))
+    if has_key_shape(text):
+        raise SystemExit("refused to print a key-shaped value")
+    print(text, end="")
+
+
+def _serve(args: argparse.Namespace) -> None:
+    serve(port=args.port, data=args.data)
+
+
 def _report(args: argparse.Namespace) -> None:
     corpus = load_corpus(args.data)
     text = write_failure_report(corpus, Path(args.gold), Path(args.answers), Path(args.out))
@@ -86,6 +100,15 @@ def main() -> None:
     actions.add_argument("--commands", required=True)
     actions.add_argument("--out", required=True)
     actions.set_defaults(func=_actions)
+
+    explain = sub.add_parser("explain", help="show why one answer was written")
+    explain.add_argument("--question", required=True)
+    explain.add_argument("--as-of", required=True)
+    explain.set_defaults(func=_explain)
+
+    page = sub.add_parser("serve", help="open a local page for questions and dry-run commands")
+    page.add_argument("--port", type=int, default=8765)
+    page.set_defaults(func=_serve)
 
     report = sub.add_parser("report", help="per-question retrieval failures against a gold file")
     report.add_argument("--gold", required=True)

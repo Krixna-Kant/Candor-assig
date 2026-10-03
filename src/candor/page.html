@@ -1,0 +1,201 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Candor</title>
+  <style>
+    :root {
+      --ink: #1c1917;
+      --muted: #6b645c;
+      --paper: #f4f0e8;
+      --line: #d9d2c5;
+      --mark: #7a3b32;
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; }
+    body {
+      background: var(--paper);
+      color: var(--ink);
+      font-family: Palatino, "Palatino Linotype", "Iowan Old Style", Georgia, serif;
+      font-size: 18px;
+      line-height: 1.45;
+    }
+    main {
+      max-width: 36rem;
+      margin: 0 auto;
+      padding: 4.5rem 1.25rem 5rem;
+    }
+    h1 {
+      font-size: 1.6rem;
+      font-weight: 500;
+      letter-spacing: -0.02em;
+      margin: 0 0 0.35rem;
+    }
+    .lede {
+      color: var(--muted);
+      margin: 0 0 2.25rem;
+      font-size: 1rem;
+    }
+    label {
+      display: block;
+      font-size: 0.78rem;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      color: var(--muted);
+      margin-bottom: 0.35rem;
+    }
+    input, textarea {
+      width: 100%;
+      font: inherit;
+      color: inherit;
+      background: transparent;
+      border: 0;
+      border-bottom: 1px solid var(--line);
+      border-radius: 0;
+      padding: 0.35rem 0 0.5rem;
+    }
+    textarea { min-height: 5.5rem; resize: vertical; }
+    input:focus, textarea:focus { outline: none; border-bottom-color: var(--ink); }
+    .when { margin-bottom: 1.4rem; }
+    .row { display: flex; gap: 0.6rem; align-items: center; margin-top: 1.1rem; }
+    button {
+      font: inherit;
+      font-size: 0.95rem;
+      background: var(--ink);
+      color: var(--paper);
+      border: 1px solid var(--ink);
+      padding: 0.4rem 0.85rem;
+      cursor: pointer;
+    }
+    button.quiet {
+      background: transparent;
+      color: var(--ink);
+    }
+    button:disabled { opacity: 0.45; cursor: default; }
+    .note { color: var(--muted); font-size: 0.9rem; margin: 0.8rem 0 0; }
+    #out { margin-top: 2.4rem; }
+    #out h2 {
+      font-size: 0.78rem;
+      font-weight: 500;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      color: var(--muted);
+      margin: 1.4rem 0 0.4rem;
+    }
+    #out p { margin: 0.2rem 0; }
+    #out ol { margin: 0.2rem 0 0; padding-left: 1.2rem; }
+    .err { color: var(--mark); }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Candor</h1>
+    <p class="lede">Ask what was known, or say what to do. Nothing is sent.</p>
+    <div class="when">
+      <label for="asof">As of</label>
+      <input id="asof" value="2026-09-18T18:00:00-07:00" spellcheck="false">
+    </div>
+    <label for="text">Question or command</label>
+    <textarea id="text" placeholder="When is Route Planner v2 launching?"></textarea>
+    <div class="row">
+      <button id="ask" type="button">Ask</button>
+      <button id="plan" type="button">Plan</button>
+      <button id="listen" class="quiet" type="button">Listen</button>
+    </div>
+    <p id="note" class="note"></p>
+    <div id="out"></div>
+  </main>
+  <script>
+    const text = document.getElementById("text");
+    const asof = document.getElementById("asof");
+    const out = document.getElementById("out");
+    const note = document.getElementById("note");
+    const Speech = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!Speech) {
+      document.getElementById("listen").disabled = true;
+      note.textContent = "This browser has no speech recognition. Type the command.";
+    }
+
+    async function run(path) {
+      out.innerHTML = "";
+      note.textContent = "";
+      const body = { text: text.value.trim(), as_of: asof.value.trim() };
+      if (!body.text) {
+        note.textContent = "Write a question or a command first.";
+        return;
+      }
+      let response;
+      try {
+        response = await fetch(path, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        });
+      } catch (err) {
+        out.innerHTML = '<p class="err">The page could not reach the local server.</p>';
+        return;
+      }
+      const payload = await response.json();
+      if (!response.ok) {
+        out.innerHTML = '<p class="err">' + escapeHtml(payload.error || "Request failed") + "</p>";
+        return;
+      }
+      if (path === "/memory") renderMemory(payload);
+      else renderActions(payload);
+    }
+
+    function renderMemory(payload) {
+      const sources = (payload.sources || []).join(", ") || "(none)";
+      const retrieved = (payload.retrieved || []).slice(0, 8);
+      out.innerHTML =
+        "<h2>Answer</h2><p>" + escapeHtml(payload.answer) + "</p>" +
+        "<h2>Sources</h2><p>" + escapeHtml(sources) + "</p>" +
+        "<h2>Retrieved</h2><ol>" +
+        retrieved.map((id) => "<li>" + escapeHtml(id) + "</li>").join("") +
+        "</ol>";
+    }
+
+    function renderActions(payload) {
+      const items = payload.actions || [];
+      if (!items.length) {
+        out.innerHTML = "<p>No action.</p>";
+        return;
+      }
+      out.innerHTML = "<h2>Would do</h2>" + items.map((action) => {
+        const args = Object.entries(action.args || {}).map(([key, value]) => {
+          const shown = Array.isArray(value) ? value.join(", ") : String(value);
+          return "<p>" + escapeHtml(key) + ": " + escapeHtml(shown) + "</p>";
+        }).join("");
+        return "<h2>" + escapeHtml(action.type) + "</h2>" + args;
+      }).join("");
+    }
+
+    function escapeHtml(value) {
+      return String(value)
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;");
+    }
+
+    document.getElementById("ask").addEventListener("click", () => run("/memory"));
+    document.getElementById("plan").addEventListener("click", () => run("/actions"));
+    document.getElementById("listen").addEventListener("click", () => {
+      const recognition = new Speech();
+      recognition.lang = "en-US";
+      recognition.onresult = (event) => {
+        text.value = event.results[0][0].transcript;
+        note.textContent = "Heard. Press Ask or Plan.";
+      };
+      recognition.onerror = () => {
+        note.textContent = "Could not hear anything. Type the command.";
+      };
+      note.textContent = "Listening…";
+      recognition.start();
+    });
+    text.addEventListener("keydown", (event) => {
+      if ((event.metaKey || event.ctrlKey) && event.key === "Enter") run("/memory");
+    });
+  </script>
+</body>
+</html>

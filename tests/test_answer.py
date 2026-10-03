@@ -11,6 +11,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from candor.answer import compose  # noqa: E402
+from candor.explain import explain_text  # noqa: E402
 from candor.ingest import load_corpus  # noqa: E402
 from candor.redact import has_key_shape, redact  # noqa: E402
 from candor.retrieve import retrieve  # noqa: E402
@@ -33,6 +34,13 @@ class AnswerTests(unittest.TestCase):
         moment = datetime.fromisoformat(as_of)
         ranked = retrieve(self.corpus, question, moment, stem=True)
         return compose(self.corpus, question, moment, ranked)
+
+    def test_explain_names_what_was_visible(self):
+        moment = datetime.fromisoformat("2026-09-18T18:00:00-07:00")
+        text = explain_text(self.corpus, "What is Dana's salary?", moment)
+        self.assertIn("Visible:", text)
+        self.assertIn("Abstained: yes", text)
+        self.assertIn("I don't know", text)
 
     def test_entity_without_the_topic_abstains(self):
         answer, _sources, abstained = self._run(

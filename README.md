@@ -38,20 +38,38 @@ Unit tests, from the repo root:
 PYTHONPATH=src PYTHONUTF8=1 python3 -m unittest tests.test_timeline tests.test_text tests.test_asof_sweep tests.test_answer tests.test_actions
 ```
 
-The paraphrase file and the phrasing file are separate from `run.sh`:
+One question, with the records it used:
 
 ```sh
+PYTHONPATH=src PYTHONUTF8=1 python3 -m candor explain \
+  --question "When is Route Planner v2 launching?" \
+  --as-of 2026-09-18T18:00:00-07:00
+```
+
+A local page for the same answerer and the same dry-run planner. Open the printed address. Listen uses the browser's speech recognition, in Chrome. Ask and Plan work by typing in any browser.
+
+```sh
+PYTHONPATH=src PYTHONUTF8=1 python3 -m candor serve
+```
+
+The paraphrase file and the phrasing file are separate from `run.sh`. `results/` is created by `run.sh` and is not in git; create it before these commands if you have not run `run.sh`.
+
+```sh
+mkdir -p results
 PYTHONPATH=src PYTHONUTF8=1 python3 -m candor memory \
   --questions evals/probe_paraphrase.jsonl \
-  --out /tmp/probe_paraphrase.jsonl
+  --out results/probe_paraphrase.jsonl
 PYTHONPATH=src PYTHONUTF8=1 python3 eval_harness/score_retrieval.py \
-  --gold evals/probe_paraphrase.jsonl --answers /tmp/probe_paraphrase.jsonl
+  --gold evals/probe_paraphrase.jsonl --answers results/probe_paraphrase.jsonl \
+  --out results/probe_retrieval.json
 PYTHONPATH=src PYTHONUTF8=1 python3 eval_harness/score_memory.py \
-  --gold evals/probe_paraphrase.jsonl --answers /tmp/probe_paraphrase.jsonl --judge none
+  --gold evals/probe_paraphrase.jsonl --answers results/probe_paraphrase.jsonl \
+  --judge none --out results/probe_memory.json
 PYTHONPATH=src PYTHONUTF8=1 python3 -m candor actions \
-  --commands evals/actions_phrasing.jsonl --out /tmp/actions_phrasing.jsonl
+  --commands evals/actions_phrasing.jsonl --out results/actions_phrasing.jsonl
 PYTHONPATH=src PYTHONUTF8=1 python3 eval_harness/score_actions.py \
-  --gold evals/actions_phrasing.jsonl --predictions /tmp/actions_phrasing.jsonl
+  --gold evals/actions_phrasing.jsonl --predictions results/actions_phrasing.jsonl \
+  --out results/actions_phrasing_score.json
 ```
 
 ## Architecture
@@ -194,9 +212,9 @@ The program was written with an in-editor coding assistant. `python -m candor me
 
 ## Questions
 
-- The reply number for answers is `--judge none`, 27/27. A Groq sample on the same file was 98.1% and moved when run again. Should the reply cite the no-judge number only?
-- Topic disambiguation: "message Sarah about geocoding" goes to Sarah Kim, and the pricing proposal may go to Sarah Patel. The train file also accepts a clarification. Should a hidden command with a shared first name always ask, even when one person owns the topic?
-- Embeddings were measured and left off because they dropped the train retrieval score. The hidden questions hit the deterministic lexical path.
+- If an answer writer or action planner used an LLM, how would you compare re-run outputs? The default path is deterministic and offline so a re-run matches exactly. Is that the right trade?
+- When you run the commit yourselves, is an API key available? The code uses none by default.
+- Topic disambiguation: should a hidden command with a shared first name always ask, even when one person owns the topic?
 
 ## Data
 
