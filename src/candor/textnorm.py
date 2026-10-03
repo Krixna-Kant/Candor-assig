@@ -134,9 +134,39 @@ def _synonym_table() -> dict[str, str]:
 
 _SYNONYMS = _synonym_table()
 
+# All-caps tokens that are ordinary words or SQL, not abbreviations.
+_NOT_ACRONYM = _STOP | frozenset({
+    "and", "or", "not", "by", "from", "where", "select", "order", "null", "group",
+    "create", "index", "over", "weekly", "range", "as", "on", "pm", "us",
+})
+_ACRONYMS: set[str] = set()
+_SHORT: set[str] = set()
 
-def analyze(text: str, *, stem: bool) -> list[str]:
-    """Tokens for BM25. `stem=True` also applies the synonym table."""
+
+def learn_lexicon(texts) -> None:
+    """Acronyms and short tokens attested in the corpus. Query expansion uses only these."""
+    acronyms: set[str] = set()
+    short: set[str] = set()
+    for text in texts:
+        for match in re.finditer(r"\b[A-Z]{2,5}\b", text):
+            word = match.group(0).lower()
+            if word not in _NOT_ACRONYM:
+                acronyms.add(word)
+        for token in tokenize(text):
+            if token.isalpha() and 4 <= len(token) <= 6:
+                short.add(token)
+    global _ACRONYMS, _SHORT
+    _ACRONYMS = acronyms
+    _SHORT = short
+
+
+def analyze(text: str, *, stem: bool, expand: bool = False) -> list[str]:
+    """Tokens for BM25. `stem=True` also applies the synonym table.
+
+    `expand=True` is for the query only. A phrase whose initials match an acronym
+    attested in the corpus gains that acronym. A long word gains a shorter corpus
+    token when that token is a prefix, so "preparation" can meet "prep".
+    """
     tokens = tokenize(text)
     if not stem:
         return tokens
@@ -147,4 +177,38 @@ def analyze(text: str, *, stem: bool) -> list[str]:
             continue
         stemmed = stem_token(token)
         analyzed.append(_SYNONYMS.get(stemmed, stemmed))
+    if expand:
+        analyzed.extend(_initialisms(tokens))
+        analyzed.extend(_clips(tokens))
     return analyzed
+
+
+def _initialisms(tokens: list[str]) -> list[str]:
+    pieces: list[str] = []
+    for token in tokens:
+        for part in re.split(r"[-/]", token):
+            if part.isalpha() and len(part) >= 2:
+                pieces.append(part)
+    found: list[str] = []
+    for size in range(2, 5):
+        for start in range(0, len(pieces) - size + 1):
+            window = pieces[start:start + size]
+            if all(part in _STOP for part in window):
+                continue
+            acronym = "".join(part[0] for part in window)
+            if acronym in _ACRONYMS:
+                found.append(acronym)
+    return found
+
+
+def _clips(tokens: list[str]) -> list[str]:
+    found: list[str] = []
+    for token in tokens:
+        if not token.isalpha() or len(token) < 8:
+            continue
+        for length in range(6, 3, -1):
+            short = token[:length]
+            if short in _SHORT and short not in _STOP and len(token) - length >= 3:
+                found.append(short)
+                break
+    return found

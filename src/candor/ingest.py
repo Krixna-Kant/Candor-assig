@@ -42,7 +42,7 @@ def load_corpus(data_dir: str | Path | None = None) -> Corpus:
     records.extend(_codex(root))
     records.extend(_chatgpt(root))
     records.sort(key=lambda record: record.available_at)
-    return Corpus(records=records, deleted=deleted, edits=edits)
+    return Corpus(records=records, deleted=deleted, edits=edits, data_dir=root)
 
 
 def _dt(value: str) -> datetime:

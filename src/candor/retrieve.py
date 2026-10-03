@@ -14,7 +14,7 @@ from datetime import datetime, timedelta
 from candor.bm25 import rank, scored
 from candor.entities import Directory, build_directory
 from candor.models import Corpus, Record
-from candor.textnorm import analyze
+from candor.textnorm import analyze, learn_lexicon
 from candor.timeline import visible
 from candor.trust import is_untrusted, question_is_about_untrusted
 
@@ -43,6 +43,7 @@ def retrieve(
 ) -> list[Record]:
     """Best-first units that exist at `as_of`. Plain mode is BM25 only."""
     pool = visible(corpus, as_of)
+    _ensure_lexicon(corpus)
     if not stem:
         return rank(pool, question, stem=False, limit=limit)
     base = scored(pool, question, stem=True, windows=True)
@@ -75,10 +76,25 @@ def retrieve(
     # An email can sit just outside the top and still be the start of the thread that answers it.
     seeds.extend((score_of[record.id], record) for record in diverse if record.source == "gmail")
     adjusted.extend(_neighbors(seeds, pool, query_terms, chain_width, question))
-    if kind == "calendar":
+    if kind == "calendar" or _asks_about_a_day(question):
         adjusted.extend(_calendar_on_day(question, pool, adjusted, chain_width))
     adjusted.sort(key=lambda item: -item[0])
     return _cap(adjusted, parent_cap, limit)
+
+
+def _ensure_lexicon(corpus: Corpus) -> None:
+    if getattr(corpus, "_lexicon_ready", False):
+        return
+    learn_lexicon(record.text for record in corpus.records)
+    corpus._lexicon_ready = True
+
+
+def _asks_about_a_day(question: str) -> bool:
+    """A day defined by another event, not only a question that says 'calendar'."""
+    return re.search(r"\bday of\b|\bthe day i\b", question, re.IGNORECASE) is not None
+
+
+_SPOKEN = re.compile(r"dictat|voice memo|voice note|audio note", re.IGNORECASE)
 
 
 def _directory(corpus: Corpus) -> Directory:
@@ -122,7 +138,7 @@ def _entity_factor(record: Record, resolution, directory: Directory) -> float:
 def _source_factor(question: str, record: Record) -> float:
     lowered = question.lower()
     factor = 1.0
-    if re.search(r"dictat", lowered) and record.source == "dictation":
+    if _SPOKEN.search(lowered) and record.source == "dictation":
         factor *= 4.0
     if re.search(r"\bemail", lowered) and record.source == "gmail":
         factor *= 1.6
@@ -180,7 +196,7 @@ def _latest(pool: list[Record], query_terms: set[str], chain_width: int, top_sco
 
 def _cued(pool: list[Record], question: str, top_score: float) -> list[tuple[float, Record]]:
     """A source the question names may not share words with the question."""
-    if not re.search(r"dictat", question, re.IGNORECASE):
+    if not _SPOKEN.search(question):
         return []
     dates = set(_dates(question))
     picked = []
@@ -269,7 +285,7 @@ def _calendar_on_day(question: str, pool: list[Record], ranked: list[tuple[float
     """Events whose start falls on a date the question names, or on a travel day in evidence."""
     dates = set(_dates(question))
     lowered = question.lower()
-    if not dates and re.search(r"fly|flight|travel", lowered):
+    if not dates and (re.search(r"fly|flight|travel", lowered) or _asks_about_a_day(question)):
         for _score, record in ranked[:40]:
             if record.source == "calendar":
                 continue

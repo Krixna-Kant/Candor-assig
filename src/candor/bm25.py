@@ -26,7 +26,7 @@ def scored(records: list[Record], query: str, *, stem: bool, windows: bool) -> l
     if not records:
         return []
     docs = [(record, analyze(record.text, stem=stem)) for record in records]
-    query_terms = analyze(query, stem=stem)
+    query_terms = analyze(query, stem=stem, expand=True)
     if not query_terms:
         return []
     count = len(docs)

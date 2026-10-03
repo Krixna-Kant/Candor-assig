@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime
+from pathlib import Path
 
 
 @dataclass(frozen=True)
@@ -35,6 +36,7 @@ class Corpus:
     records: list[Record]
     deleted: dict[str, datetime] = field(default_factory=dict)
     edits: dict[str, list[tuple[datetime, str]]] = field(default_factory=dict)
+    data_dir: Path | None = None
 
     def by_id(self) -> dict[str, Record]:
         return {record.id: record for record in self.records}

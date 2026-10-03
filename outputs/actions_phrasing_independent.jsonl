@@ -1,0 +1,10 @@
+{"id": "ACT-OWN-01", "actions": [{"type": "slack.send_message", "args": {"to": "U04DANA", "text": "Ping Dana in Slack: the mockups look great, nice work"}}]}
+{"id": "ACT-OWN-02", "actions": [{"type": "gmail.send", "args": {"to": ["marcus@brightline.example.com"], "subject": "Note", "body": "on the Harbor demo environment"}}]}
+{"id": "ACT-OWN-03", "actions": [{"type": "calendar.update_event", "args": {"event_id": "CAL-F-11", "start": "2026-09-14T17:00:00-07:00", "end": "2026-09-14T17:30:00-07:00"}}]}
+{"id": "ACT-OWN-04", "actions": [{"type": "confirm", "args": {"summary": "Cancel my dentist appointment"}}]}
+{"id": "ACT-OWN-05", "actions": [{"type": "reminder.create", "args": {"text": "send Tom the pre-read", "due": "2026-09-19T08:30:00-07:00"}}]}
+{"id": "ACT-OWN-06", "actions": [{"type": "calendar.create_event", "args": {"title": "go over the regression plan", "start": "2026-09-21T10:00:00-07:00", "end": "2026-09-21T10:45:00-07:00", "attendees": ["dana@brightline.example.com", "priya@brightline.example.com"]}}]}
+{"id": "ACT-OWN-07", "actions": [{"type": "memory.ask", "args": {"question": "Remind me what we decided about the Harbor demo"}}]}
+{"id": "ACT-OWN-08", "actions": [{"type": "slack.send_message", "args": {"to": "C11SALES", "text": "the Acme proposal is out"}}]}
+{"id": "ACT-OWN-09", "actions": [{"type": "gmail.send", "args": {"to": ["dana@brightline.example.com", "priya@brightline.example.com"], "subject": "Note", "body": "the offsite agenda draft is ready", "cc": ["leah@brightline.example.com"]}}]}
+{"id": "ACT-OWN-10", "actions": [{"type": "clarify", "args": {"question": "Which person: Sarah Kim or Sarah Patel?"}}]}

@@ -8,7 +8,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from candor.textnorm import analyze, stem_token  # noqa: E402
+from candor.textnorm import analyze, learn_lexicon, stem_token  # noqa: E402
 
 
 class TextTests(unittest.TestCase):
@@ -39,6 +39,15 @@ class TextTests(unittest.TestCase):
         self.assertIn("flight", set(analyze("the flight", stem=True)))
         self.assertIn("flight", set(analyze("we fly", stem=True)))
         self.assertIn("flight", set(analyze("flying out", stem=True)))
+
+    def test_query_expansion_uses_attested_forms_only(self):
+        learn_lexicon(["The SSO rollout is separate.", "Board deck prep is Friday."])
+        expanded = analyze("single sign-on and the preparation", stem=True, expand=True)
+        self.assertIn("sso", expanded)
+        self.assertIn("prep", expanded)
+        plain = analyze("single sign-on and the preparation", stem=True, expand=False)
+        self.assertNotIn("sso", plain)
+        self.assertNotIn("prep", plain)
 
     def test_dates_and_amounts_stay_whole(self):
         tokens = analyze("p95 was 1.8 and the fee is $18 on 10/21", stem=True)
