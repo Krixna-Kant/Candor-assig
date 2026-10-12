@@ -370,3 +370,41 @@ Frozen retrieval by category (top 10, pass/fail only; 3 abstention questions are
 No frozen join, "after X" or open-items question improved. The three anchor questions passed before step 3 and still pass. The multi-hop question and two of the three open-items questions failed before and still fail. No frozen question changed in either direction, at top 10 or at top 20.
 
 **The step 3 gains are fitted to the development sets.** The probe was used to choose between the join variants (78.6 against 85.7), and every mechanism was designed from a train or probe failure. So the probe is no longer a held-out check, and the train and probe gains do not show that the mechanisms generalise. The only held-out evidence is the frozen set, and it did not move. The frozen revision allowed after this report was not used. Building one from failing frozen ids and categories would be tuning to the frozen set, and nothing in the development sets points to a change.
+
+## Step 4: actions
+
+All numbers are full-match pass rates from `eval_harness/score_actions.py`. The development sets are train (12), extra (33) and phrasing (10). The independent phrasing set (10) and the frozen set (15) are reported as numbers only.
+
+**Which sets were looked at.** While building the planner, I read the commands, expected actions and outputs of train, extra and phrasing. For the independent phrasing set and the frozen set, only scores were printed. But the frozen action set was written earlier in the same working session by the same assistant, so its commands were already known: for example, that Gary Holm has no address. The step 4 work also targets the kinds of command it covers (channels named by a word, people outside the directory, meetings with several people, "open X"). **So the frozen 60.0% (9/15) is a development score, not a held-out result.** The README says the same.
+
+### Resolver rules (no model)
+
+| run | change | train | extra | phrasing | independent | frozen |
+|---|---|---|---|---|---|---|
+| after step 3 | none | 91.7 | 90.9 | 100 | 100 | 26.7 |
+| rules | the four changes below | 100 | 97.0 | 100 | 100 | 60.0 |
+| reference needs no verb | a phrase with a verb is the message, not a thing to look up | 100 | 100 | 100 | 100 | 60.0 |
+| names and bodies | a full name no longer hides other first names; "let X know …" and "X: …" bodies | 100 | 100 | 100 | 100 | 60.0 |
+
+The four changes:
+
+- **Message from memory.** "Email John the corrected NRR" gives no words to send; it names a thing. The resolver asks memory "What is the corrected NRR?" at the command's time and sends the answer. If memory cannot answer, it asks instead of sending. This puts back, as a general rule, the "corrected NRR" lookup removed in step 1. The answer depends on the time: 112% at noon on Sep 16, after Ben's correction, and 118% at 10:00, before it.
+- **Channels from a word.** The recipient words after the verb are matched against channel names, then against channel topics from `channels.json`. "Everyone" and "the whole company" match the company-wide channel by its topic. One match sends; two or more ask which channel. A recipient that names a person in the directory is never read as a channel.
+- **People outside the directory.** A capitalised name in a recipient slot (after the verb, "with", "cc", "to", "and" or a comma) that is not in the directory is looked up in trusted records visible at the command's time. The address must sit within 80 characters of the name and start with the first name. One address is used. Several, or none, ask. A name never seen gets "I don't know who … is."
+- **"Open X".** X opens if it is an app on a fixed list of common apps. If trusted records mention it, the command becomes a memory question; otherwise it asks what to open.
+
+Meetings with several people already worked for first names. "John, Marcus and Sarah Kim" failed because one full-name match hid the first names; that is fixed in the last row.
+
+### Model slot reader
+
+`candor/slots.py` sends the command, as data, to the configured model (`LLM_*`) with no tools. The prompt asks only for labels: intent, to, cc, when, length, event, about, say, app. Every label must be words copied from the command, or the whole reply is refused and the rules read the command. The labels are written back as one plain command per action, and the same deterministic resolver handles them. So the model never chooses a person, channel, event, address or time. The checks for planted instructions, destructive commands and blocked addresses run before the model is called. A question, or an "other" intent, goes to the rules. Replies are cached by prompt hash, model and command. `CANDOR_SLOTS=off` turns the reader off.
+
+Development was done on `openai/gpt-oss-20b`, because Groq limits each model separately and the 120b model's tokens were needed for answers. Strict mode was on, and no run fell back.
+
+| run | change | train | extra | phrasing |
+|---|---|---|---|---|
+| slots prompt 1 | as above, with a `lookup` label for "a fact to look up" | 91.7 | 84.9 | 80.0 |
+| slots revision 1 | `lookup` removed; `about` added. Whether a phrase names a thing is decided in code, by the same no-verb rule the resolver uses | 83.3 | 87.9 | 100 |
+| + code fixes | "move" reads the new time from `to` when `when` is empty; an `about` the command never introduced with "about" and that names a thing is a lookup | 100 | 100 | 100 |
+
+Prompt 1 failed because the model put "the corrected NRR" under words to send, and it dropped meeting topics. Revision 1 is the only prompt change. The fixes after it are in code, so the model is not asked for judgements the rules already make. The prompt names nobody from the data, and `tests/test_slots.py` checks that.

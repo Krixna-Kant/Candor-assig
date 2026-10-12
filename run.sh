@@ -19,7 +19,7 @@ export PYTHONUTF8=1
 export PYTHONPATH="$(pwd)/src"
 mkdir -p results
 "$VENV" -m unittest tests.test_timeline tests.test_text tests.test_asof_sweep tests.test_actions \
-  tests.test_hops tests.test_writer
+  tests.test_hops tests.test_writer tests.test_slots
 "$VENV" -m candor memory --questions evals/memory_train.jsonl --out outputs/memory_train.jsonl
 "$VENV" eval_harness/score_retrieval.py \
   --gold evals/memory_train.jsonl \

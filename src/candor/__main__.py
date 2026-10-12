@@ -74,14 +74,23 @@ def _actions(args: argparse.Namespace) -> None:
     commands = _load_jsonl(Path(args.commands))
     out_path = Path(args.out)
     out_path.parent.mkdir(parents=True, exist_ok=True)
+    readers: Counter[str] = Counter()
+    fallbacks = []
     with out_path.open("w", encoding="utf-8") as handle:
         for item in commands:
-            actions = plan(corpus, item["command"], datetime.fromisoformat(item["as_of"]))
+            trace: dict = {}
+            actions = plan(corpus, item["command"], datetime.fromisoformat(item["as_of"]), trace)
+            readers[trace["reader"].split(":", 1)[0]] += 1
+            if trace["reader"].startswith("fallback"):
+                fallbacks.append(item["id"])
             blob = json.dumps(actions)
             if has_key_shape(blob):
                 raise SystemExit(f"{item['id']}: refused to write a key-shaped action")
             handle.write(json.dumps({"id": item["id"], "actions": actions}, ensure_ascii=False) + "\n")
-    print(f"wrote {len(commands)} action plans to {out_path}")
+    summary = ", ".join(f"{name} {count}" for name, count in sorted(readers.items()))
+    print(f"wrote {len(commands)} action plans to {out_path} (reader: {summary})")
+    if fallbacks:
+        print(f"fell back to the rules for: {', '.join(fallbacks)}")
 
 
 def _explain(args: argparse.Namespace) -> None:

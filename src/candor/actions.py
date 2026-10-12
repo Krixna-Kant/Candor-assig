@@ -18,6 +18,7 @@ from candor.entities import Directory, Person, build_directory
 from candor.ingest import default_data_dir
 from candor.models import Corpus, Record
 from candor.redact import redact
+from candor.slots import names_a_thing, rewrite
 from candor.timeline import visible
 from candor.trust import is_untrusted
 
@@ -56,6 +57,14 @@ _GLUE = frozenset({
     "send", "forward", "just", "your", "ours", "them", "they", "into", "onto",
     "text", "ping", "shoot", "block", "push", "running", "late", "where",
 })
+# Desktop and web apps a command may open by name.
+APPS = frozenset({
+    "slack", "gmail", "mail", "calendar", "google calendar", "figma", "notes", "notion", "linear", "jira",
+    "github", "zoom", "chrome", "safari", "firefox", "terminal", "finder", "spotify", "messages",
+    "excel", "word", "powerpoint", "keynote", "numbers", "pages", "google docs", "google sheets", "docs",
+    "sheets", "drive", "google drive", "dropbox", "salesforce", "hubspot", "loom", "miro", "asana",
+    "trello", "vs code", "vscode", "cursor", "xcode", "teams", "outlook", "chatgpt", "codex", "settings",
+})
 _HOUR_WORD = {"an": 1, "a": 1, "one": 1, "two": 2, "three": 3, "four": 4}
 _WHEN = re.compile(
     r"(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[+-]\d{2}:\d{2})\s+to\s+"
@@ -63,8 +72,13 @@ _WHEN = re.compile(
 )
 
 
-def plan(corpus: Corpus, command: str, as_of: datetime) -> list[dict]:
-    """Return dry-run actions for one command. The list may be a single clarify or confirm."""
+def plan(corpus: Corpus, command: str, as_of: datetime, trace: dict | None = None) -> list[dict]:
+    """Return dry-run actions for one command. The list may be a single clarify or confirm.
+
+    `trace`, when given, gets "reader": which path split the command (model, cache, rules, fallback).
+    """
+    trace = {} if trace is None else trace
+    trace["reader"] = "rules"
     command = " ".join(command.split())
     world = _world(corpus)
     if _INJECTION.search(command) or _mentions_blocked(command, world["blocked"]):
@@ -75,16 +89,16 @@ def plan(corpus: Corpus, command: str, as_of: datetime) -> list[dict]:
         return _finish([{"type": "memory.ask", "args": {"question": command}}])
 
     shown = visible(corpus, as_of)
+    clauses, trace["reader"] = rewrite(command)
     actions: list[dict] = []
-    for clause in _clauses(command):
+    for clause in clauses or _clauses(command):
         actions.extend(_one(world, shown, clause, as_of))
     return _finish(_drop_blocked(actions, world["blocked"]))
 
 
 def _one(world: dict, shown: list[Record], clause: str, as_of: datetime) -> list[dict]:
     if re.match(r"^open\b", clause, re.IGNORECASE):
-        app = re.sub(r"^open\s+", "", clause, flags=re.IGNORECASE).strip(" .")
-        return [{"type": "app.open", "args": {"app": app}}]
+        return [_open(shown, clause)]
     if re.match(r"^(move|reschedule|shift|push)\b", clause, re.IGNORECASE):
         return [_move(shown, clause, as_of)]
     if re.match(r"^(book|schedule|block)\b", clause, re.IGNORECASE):
@@ -96,6 +110,17 @@ def _one(world: dict, shown: list[Record], clause: str, as_of: datetime) -> list
     ):
         return [_remind(shown, clause, as_of)]
     return [_deliver(world, shown, clause, as_of)]
+
+
+def _open(shown: list[Record], clause: str) -> dict:
+    """An app opens. Anything else is something in memory, or a question back."""
+    target = re.sub(r"^open\s+(?:up\s+)?", "", clause, flags=re.IGNORECASE).strip(" .")
+    if re.sub(r"\s+app$", "", target.lower()) in APPS:
+        return {"type": "app.open", "args": {"app": target}}
+    terms = [word for word in re.findall(r"[a-z0-9]+", target.lower()) if len(word) >= 3 and word not in _GLUE and word not in _NOT_A_NAME]
+    if terms and any(all(term in record.text.lower() for term in terms[:3]) for record in shown if not is_untrusted(record)):
+        return {"type": "memory.ask", "args": {"question": f"Find {target}"}}
+    return _clarify(f"I don't know an app or a record called {target}. What should I open?")
 
 
 def _move(shown: list[Record], clause: str, as_of: datetime) -> dict:
@@ -114,7 +139,7 @@ def _move(shown: list[Record], clause: str, as_of: datetime) -> dict:
 
 
 def _book(world: dict, shown: list[Record], clause: str, as_of: datetime) -> dict:
-    people, question = _parties(world["directory"], clause, shown)
+    people, question = _with_outsiders(world["directory"], clause, shown)
     if question:
         return _clarify(question)
     if not people:
@@ -128,7 +153,7 @@ def _book(world: dict, shown: list[Record], clause: str, as_of: datetime) -> dic
     day = _day(clause, as_of) or as_of.astimezone(LA).date()
     hour, minute = _clock(clause) or (9, 0)
     start = datetime(day.year, day.month, day.day, hour, minute, tzinfo=LA)
-    title = _purpose(clause) or people[0].full
+    title = _purpose(clause) or " / ".join(person.full for person in people)
     return {
         "type": "calendar.create_event",
         "args": {
@@ -163,18 +188,28 @@ def _remind(shown: list[Record], clause: str, as_of: datetime) -> dict:
 
 
 def _deliver(world: dict, shown: list[Record], clause: str, as_of: datetime) -> dict:
-    channel = _channel(clause, world["channels"])
+    channel, question = _channel(clause, world)
+    if question:
+        return _clarify(question)
     body = _utterance(clause)
+    named = _REFERENCE.match(clause) if body == clause else None
+    if named and not names_a_thing(named.group(1)):
+        named = None
+    if named:
+        found = _recall(world, f"What is {named.group(1).strip(' .')}?", as_of)
+        if found is None:
+            return _clarify(f"I couldn't find {named.group(1).strip(' .')} in what I have. What should it say?")
+        body = found
     if channel:
         return {"type": "slack.send_message", "args": {"to": channel, "text": body}}
 
     rest, cc_text = _split_cc(clause)
     cc_people: list[Person] = []
     if cc_text:
-        cc_people, question = _parties(world["directory"], cc_text, shown)
+        cc_people, question = _with_outsiders(world["directory"], f"cc {cc_text}", shown)
         if question:
             return _clarify(question)
-    people, question = _parties(world["directory"], rest, shown)
+    people, question = _with_outsiders(world["directory"], rest, shown)
     if question:
         return _clarify(question)
     if not people:
@@ -185,6 +220,25 @@ def _deliver(world: dict, shown: list[Record], clause: str, as_of: datetime) -> 
     if _wants_email(clause) or not person.slack_id:
         return _mail(world, [person], [], clause, body)
     return {"type": "slack.send_message", "args": {"to": person.slack_id, "text": body}}
+
+
+# "Email John the corrected NRR": the message is a thing named, to be looked up, not words to send.
+_REFERENCE = re.compile(
+    r"^(?:email|send|forward|message|tell|text|slack|ping|give)\s+\S+(?:\s+[A-Z][a-z]+)?\s+"
+    r"((?:the|our|my|their|his|her|latest|current)\s+.+?)(?:\s+(?:on slack|by email|over email))?$",
+    re.IGNORECASE,
+)
+
+
+def _recall(world: dict, question: str, as_of: datetime) -> str | None:
+    """Memory's answer as of the command's time, or None when memory does not know."""
+    from candor.retrieve import retrieve
+    from candor.writer import respond
+
+    corpus = world["corpus"]
+    ranked = retrieve(corpus, question, as_of, stem=True)
+    answer, _sources, abstained, _origin = respond(corpus, question, as_of, ranked)
+    return None if abstained else answer
 
 
 def _mail(world: dict, people: list[Person], copied: list[Person], clause: str, body: str) -> dict:
@@ -250,6 +304,60 @@ def _parties(
     return chosen, None
 
 
+# A name in a recipient slot: right after the verb, or after with / cc / to / and / a comma.
+_CAPITALIZED = re.compile(r"(?:^[A-Za-z]+|\bwith|\bcc|\bto|\band|,)\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)\b")
+_NOT_PEOPLE = frozenset({
+    "slack", "email", "gmail", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday",
+    "january", "february", "march", "april", "may", "june", "july", "august", "september", "october",
+    "november", "december", "i", "ok", "okay", "thanks", "hi", "hello", "please",
+})
+
+
+def _with_outsiders(directory: Directory, clause: str, shown: list[Record]) -> tuple[list[Person], str | None]:
+    """Everyone the clause names: directory people, then names found only in memory."""
+    people, question = _parties(directory, clause, shown)
+    if question:
+        return [], question
+    known = {part for person in directory.people for part in (person.first, person.last)}
+    for match in _CAPITALIZED.finditer(clause):
+        name = match.group(1)
+        parts = name.lower().split()
+        if parts[0] in _NOT_PEOPLE or (len(parts) == 1 and parts[0] in known):
+            continue
+        if any(person.full.lower() == name.lower() for person in directory.people):
+            continue
+        if len(parts) == 2 and parts[0] in known and parts[1] in _NOT_PEOPLE:
+            continue
+        address, problem = _lookup_address(name, shown)
+        if problem:
+            return [], problem
+        people.append(Person(key=name.lower(), full=name, first=parts[0], last=parts[-1],
+                             emails=frozenset({address}), slack_id=None))
+    return people, None
+
+
+def _lookup_address(name: str, shown: list[Record]) -> tuple[str | None, str | None]:
+    """One address written next to the name in a trusted record, or the question to ask instead."""
+    pattern = re.compile(rf"\b{re.escape(name)}\b", re.IGNORECASE)
+    first = name.split()[0].lower()
+    seen_name = False
+    found: set[str] = set()
+    for record in shown:
+        if is_untrusted(record):
+            continue
+        for hit in pattern.finditer(record.text):
+            seen_name = True
+            nearby = record.text[max(0, hit.start() - 80): hit.end() + 80].lower()
+            found |= {email for email in _EMAIL.findall(nearby) if email.split("@")[0].startswith(first)}
+    if len(found) == 1:
+        return found.pop(), None
+    if len(found) > 1:
+        return None, f"I found more than one address for {name}: {', '.join(sorted(found))}. Which one?"
+    if seen_name:
+        return None, f"I don't have an email for {name}."
+    return None, f"I don't know who {name} is."
+
+
 def _split_cc(clause: str) -> tuple[str, str]:
     match = re.search(r"\bcc\s+(.+?)(?=\s*,\s*that\b|\s+that\b|$)", clause, re.IGNORECASE)
     if not match:
@@ -262,10 +370,11 @@ def _split_cc(clause: str) -> tuple[str, str]:
 def _named(directory: Directory, text: str) -> list[Person]:
     lowered = text.lower()
     full = [person for person in directory.people if person.full.lower() in lowered]
-    if full:
-        return full
-    found: list[Person] = []
-    seen: set[str] = set()
+    # A full name uses up its first name; other first names in the clause still count.
+    for person in full:
+        lowered = lowered.replace(person.full.lower(), " ")
+    found: list[Person] = list(full)
+    seen: set[str] = {person.key for person in full}
     for person in directory.people:
         if person.key in seen:
             continue
@@ -320,6 +429,9 @@ def _about(person: Person, record: Record) -> bool:
 def _utterance(clause: str) -> str:
     if re.match(r"^thank\b", clause, re.IGNORECASE):
         return "Thanks"
+    match = re.search(r"^[^:]{1,60}:\s*(.+)", clause) or re.search(r"^let\s+.+?\s+know\s+(?:that\s+)?(.+)", clause, re.IGNORECASE)
+    if match:
+        return match.group(1).rstrip(".")
     match = re.search(r"\b(?:that|we're|we are)\s+(.+)", clause, re.IGNORECASE)
     if match:
         return match.group(1).rstrip(".")
@@ -391,14 +503,50 @@ def _event_end(record: Record) -> datetime | None:
     return datetime.fromisoformat(match.group(2))
 
 
-def _channel(clause: str, channels: dict[str, str]) -> str | None:
-    if not re.search(r"\bchannel\b|#", clause, re.IGNORECASE):
-        return None
-    folded = re.sub(r"[^a-z0-9]", "", clause.lower())
-    matches = [(cid, name) for cid, name in channels.items() if re.sub(r"[^a-z0-9]", "", name) in folded]
-    if not matches:
-        return None
-    return max(matches, key=lambda item: len(item[1]))[0]
+_RECIPIENT = re.compile(
+    r"^(?:tell|message|ping|slack|text|post (?:in|to)|update|let|notify|announce to|send)\s+(.+?)"
+    r"(?=\s+(?:that|know|about|we'?re|we are|on slack)\b|:|,|$)",
+    re.IGNORECASE,
+)
+_GROUP_FILLER = frozenset({"the", "our", "my", "in", "to", "on", "folks", "team", "people", "crew", "group", "everyone", "all", "whole", "gang"})
+_EVERYONE = re.compile(r"\b(everyone|everybody|the whole company|whole team|all hands|the company)\b", re.IGNORECASE)
+
+
+def _channel(clause: str, world: dict) -> tuple[str | None, str | None]:
+    """A channel the clause names, by name, by '#', or by a word from its topic. (id, question)."""
+    channels, topics = world["channels"], world.get("topics", {})
+    if re.search(r"\bchannel\b|#", clause, re.IGNORECASE):
+        folded = re.sub(r"[^a-z0-9]", "", clause.lower())
+        matches = [(cid, name) for cid, name in channels.items() if re.sub(r"[^a-z0-9]", "", name) in folded]
+        if matches:
+            return max(matches, key=lambda item: len(item[1]))[0], None
+    found = _RECIPIENT.match(clause)
+    if not found:
+        return None, None
+    phrase = found.group(1)
+    if found.end() == len(clause):
+        # No word marks where the recipient ends, so only the first few words can name it.
+        phrase = " ".join(phrase.split()[:3])
+    if _named(world["directory"], phrase):
+        return None, None
+    words = [word for word in re.findall(r"[a-z0-9]+", phrase.lower()) if word not in _GROUP_FILLER]
+    if _EVERYONE.search(phrase):
+        words.append("company")
+    if not words:
+        return None, None
+    by_name = [cid for cid, name in channels.items() if set(re.findall(r"[a-z0-9]+", name.lower())) <= set(words)]
+    if not by_name:
+        by_name = [cid for cid, name in channels.items() if re.findall(r"[a-z0-9]+", name.lower())[0] in words]
+    candidates = by_name or [
+        cid for cid, topic in topics.items()
+        if set(words) & {word for word in re.findall(r"[a-z0-9]+", topic.lower()) if len(word) >= 2 and word not in _NOT_A_NAME}
+    ]
+    if len(candidates) == 1:
+        return candidates[0], None
+    if len(candidates) > 1:
+        names = " or ".join(f"#{channels[cid]}" for cid in sorted(candidates, key=channels.get))
+        return None, f"Which channel: {names}?"
+    return None, None
 
 
 def _clauses(command: str) -> list[str]:
@@ -590,6 +738,14 @@ def _world(corpus: Corpus) -> dict:
     users = json.loads((root / "connectors" / "slack" / "users.json").read_text(encoding="utf-8"))
     emails = {user["id"]: user["email"] for user in users if user.get("email")}
     channels: dict[str, str] = {}
+    topics: dict[str, str] = {}
+    listing = root / "connectors" / "slack" / "channels.json"
+    if listing.exists():
+        for channel in json.loads(listing.read_text(encoding="utf-8")):
+            if channel.get("is_dm"):
+                continue
+            channels[channel["id"]] = channel["name"]
+            topics[channel["id"]] = channel.get("topic") or ""
     blocked: set[str] = set()
     trusted: set[str] = set()
     for record in corpus.records:
@@ -606,7 +762,9 @@ def _world(corpus: Corpus) -> dict:
         "directory": build_directory(corpus),
         "emails": emails,
         "channels": channels,
+        "topics": topics,
         "blocked": blocked - trusted,
+        "corpus": corpus,
     }
     corpus._action_world = world
     return world

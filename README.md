@@ -170,6 +170,9 @@ Seven coverage questions miss the top 10: `MEM-PR-01`, `MEM-PR-04`, `MEM-PR-05`,
 | `evals/actions_extra.jsonl` (33) | 33/33 | 100% |
 | `evals/actions_phrasing.jsonl` (10) | 10/10 | 100% |
 | `actions_phrasing_independent.jsonl` (10), independent phrasing check, written outside the codebase | first run 3/10 (argument accuracy 53.3%); after the planner fix 10/10 | 100% after the fix |
+| `actions_v2_independent.jsonl` (15), v2 frozen set, **development score** | v1 4/15; v2 rules 9/15 | 81.8% |
+
+The v2 frozen action set is not held out for the planner. The same assistant that wrote its commands, and so knows their content, also built the v2 planner, and the v2 planner work targets the kinds of command it covers. Its 9/15 is a development score, not evidence of how the planner does on unseen commands.
 
 The extra file was written against this planner. It is a regression set, not a hidden set. One extra command asks for the NRR figure before Ben's correction and expects 118; the same wording after the correction expects 112. Both come from the records visible at `as_of`. The phrasing file uses different verbs and word order, including cancel, "the other Sarah," two intents in one command, "in two days," and "the day after tomorrow." It was scored once.
 
