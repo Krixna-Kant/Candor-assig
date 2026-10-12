@@ -50,6 +50,22 @@ These sets are not truly held out. The same assistant that will change the code 
 
 The hashes are of the files with LF line endings, which is how git stores them. A Windows checkout may convert them to CRLF, so check with `git show HEAD:evals/v2_memory.jsonl | sha256sum`.
 
+## Holdout
+
+`holdout_memory.jsonl` (21 questions, 3 of them not answerable) and `holdout_actions.jsonl` (14 commands) were written outside this working session, after retrieval and the planner were final. The assistant that built the code has not opened them. Before this commit they were checked only by scripts that print counts and line numbers, never content:
+
+- every line is valid JSON with the harness's fields;
+- no id is reused from another set;
+- every cited record exists, is available at the question's `as_of`, and is not deleted by then;
+- every email address and channel id in the expected actions appears in `data/`.
+
+They are scored once, in the final pass, with no change to the code afterwards. Only totals and per-category counts are printed. With about 20 and 14 items, the 95% interval is roughly ±20–25 points, so this is a rough estimate of the hidden-set score, not a precise one.
+
+| file | sha256 (LF) |
+|---|---|
+| `holdout_memory.jsonl` | `a2f378b1f3eccf32d4b4b124dc7a7847bdec345fe1341da2575bc81d2b2a8d55` |
+| `holdout_actions.jsonl` | `cc08dd9365c24092f3a65b74be480bd785fd18b5d5079672d32faba7b2e1b86b` |
+
 ## v1 baseline (tag `v1-submitted`, no code changes)
 
 | set | retrieval | answers strict (judge none) | actions |
