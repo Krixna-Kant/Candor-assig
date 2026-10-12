@@ -8,11 +8,11 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 from candor.actions import plan
-from candor.answer import compose
 from candor.ingest import load_corpus
 from candor.models import Corpus
 from candor.redact import has_key_shape, redact
 from candor.retrieve import retrieve
+from candor.writer import respond
 
 _PAGE = (Path(__file__).with_name("page.html")).read_text(encoding="utf-8")
 _corpus: Corpus | None = None
@@ -59,13 +59,14 @@ class _Handler(BaseHTTPRequestHandler):
             return
         if path == "/memory":
             ranked = retrieve(corpus, text, as_of, stem=True)
-            answer, sources, abstained = compose(corpus, text, as_of, ranked)
+            answer, sources, abstained, origin = respond(corpus, text, as_of, ranked)
             answer = redact(answer)
             body = {
                 "answer": answer,
                 "sources": sources,
                 "abstained": abstained,
                 "retrieved": [record.id for record in ranked],
+                "writer": origin.split(":", 1)[0],
             }
         else:
             actions = plan(corpus, text, as_of)

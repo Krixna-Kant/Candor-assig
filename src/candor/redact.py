@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 
-_KEY = re.compile(r"sk-[A-Za-z0-9_\-]{16,}")
+_KEY = re.compile(r"\b(?:sk-|gsk_)[A-Za-z0-9_\-]{16,}|\bAIza[0-9A-Za-z_\-]{30,}")
 
 
 def redact(text: str) -> str:

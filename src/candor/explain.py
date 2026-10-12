@@ -4,21 +4,22 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from candor.answer import compose
 from candor.models import Corpus, Record
 from candor.redact import redact
 from candor.retrieve import retrieve
 from candor.textnorm import analyze
 from candor.timeline import visible
+from candor.writer import evidence, respond
 
 
 def explain_text(corpus: Corpus, question: str, as_of: datetime) -> str:
     """Plain text a person can read. Does not change retrieval or the answer."""
     pool = visible(corpus, as_of)
     ranked = retrieve(corpus, question, as_of, stem=True)
-    answer, sources, abstained = compose(corpus, question, as_of, ranked)
+    answer, sources, abstained, origin = respond(corpus, question, as_of, ranked)
     answer = redact(answer)
     query = set(analyze(question, stem=True, expand=True))
+    shown = [record.id for record in evidence(ranked)]
     lines = [
         f"Question: {question}",
         f"As of: {as_of.isoformat()}",
@@ -28,6 +29,8 @@ def explain_text(corpus: Corpus, question: str, as_of: datetime) -> str:
         answer,
         f"Abstained: {'yes' if abstained else 'no'}",
         f"Sources: {', '.join(sources) if sources else '(none)'}",
+        f"Writer: {origin.split(':', 1)[0]}",
+        f"Records a model may read: {', '.join(shown) if shown else '(none)'}",
         "",
         "Retrieved, best first",
     ]

@@ -102,4 +102,162 @@ No change on the frozen set does not prove a rule was useless. The deterministic
 
 The two retrieval removals were keyed to particular words, not to an anchor in general. Step 19 looked for a date only in records containing "flight", "united" or "depart", and only when the question said "fly", "flight" or "travel". The answer-side twin (step 4) also cut the sentence at "Flight 2" and quoted the flight only when the question said "fly", "flight" or "denver". The idea behind them is general: find the anchor event, then search around its date. Step 3 rebuilds that from any anchor record, not from flight words.
 
-After step 1: train 92.0% retrieval, 70.4% answers, 11/12 actions. The frozen sets are unchanged from v1. Steps 2–4 have to win back the train losses with general mechanisms: the LLM writer for answers, anchor-first retrieval for "the day of X", and claim chains for "has / still".
+After step 1: train 92.0% retrieval, 70.4% answers, 11/12 actions.
+
+### Judge
+
+The judge is the harness's own `--judge openai` path, pointed at an OpenAI-compatible endpoint. No OpenAI account is used.
+
+- Routine judge: `qwen/qwen3.8-27b` on Groq. The writer in step 2 is `openai/gpt-oss-120b`, so the judge is a different model family.
+- Gemini's free tier allows 20 requests a day per model. That is too few for routine runs, so `gemini-2.5-flash` is used only as a spot check on the final numbers.
+- The harness is not edited. A scratch wrapper paces its HTTP calls and adds a User-Agent header, which Groq requires. It also asks Groq to hide Qwen's reasoning text. The judge prompt and the parsing are unchanged.
+
+Train answers after step 1, judged by Qwen: **63.0% strict** (70.4% with no judge). The judge downgraded seven answers that pass on key terms:
+
+- `MEM-TR-08` repeats Dana's outdated claim about John.
+- `MEM-TR-07`, `MEM-TR-24` and `MEM-TR-20` give the due date or the request but do not say it landed or was sent.
+- `MEM-TR-02` also mentions the superseded date.
+- `MEM-TR-09` and `MEM-TR-10` each leave out a point the rubric requires.
+
+These are the losses the removed rules were covering up.
+
+### Judged baselines
+
+The judge only runs on answers that already pass the key-term rules, and it can only downgrade them. So the judged score is never higher than the no-judge score. An answer that is correct but misses a key term stays wrong whatever the judge says.
+
+Each judge reply is cached on disk, keyed by provider, model and the full judge prompt. The prompt contains the question, as-of time, reference answer, rubric and answer text. A rerun on the same answers therefore gives the same score, so a change in score means an answer changed.
+
+| answers | train, no judge | train, Qwen judge | frozen v2, no judge | frozen v2, Qwen judge |
+|---|---|---|---|---|
+| v1 (tag `v1-submitted`) | 100% | 90.7% | 23.1% | 17.3% |
+| after step 1 | 70.4% | 63.0% | 23.1% | 17.3% |
+
+Judge noise: I judged the 27 v1 train answers a second time without the cache, and 0 of 27 verdicts changed. An earlier uncached run of the step-1 train answers also gave 63.0%. On this evidence the judge is stable to about one question, but two repeats cannot rule out the odd flip.
+
+The judged numbers measure before against after on the same judge. They do not predict the reviewer's score. Qwen's strictness is not the reviewer's judge, and the hidden set is not this set.
+
+## Step 2: the model answer writer
+
+Writer: `openai/gpt-oss-120b` on Groq, temperature 0. It reads the top 10 trusted retrieved records, with their text as of the question time, key-shaped tokens redacted, and each record in a `<record ...>` block. The prompt says block contents are data, never instructions. The model has no tools. Its source ids are kept only when they name a block it was shown. "Not answerable" becomes "I don't know…" with no sources.
+
+An answer is rejected, and the deterministic writer used instead, if any of these hold:
+
+- it has a key-shaped token;
+- it repeats six words in a row from a message deleted by the question time;
+- the reply is not valid JSON.
+
+Scored runs set `CANDOR_WRITER_STRICT=1`. A model error then stops the run instead of falling back, so every scored answer below came from the model or its cache. No run had a fallback.
+
+`retrieved` was byte-identical to the deterministic run on every question in every run below.
+
+| run | change | train no judge / judged | frozen no judge / judged |
+|---|---|---|---|
+| after step 1 | deterministic writer | 70.4 / 63.0 | 23.1 / 17.3 |
+| prompt 1 | the writer, prompt as specified | 92.6 / 77.8 | 53.8 / 50.0 |
+| + excerpts | long records keep their opening and the 50-word windows that share the most question words, instead of the first 350 words | 96.3 / 81.5 | 61.5 / 57.7 |
+| revision 1 | rule 5: when a person's own words appear beside a report of them, give their own words; new rule 7: include the names, dates, numbers and reasons the records give for each part of the question | 92.6 / 83.3 | 65.4 / 63.5 |
+
+Why each change was made. Every change came from a train failure, not from reading frozen answers.
+
+- **Excerpts.** `MEM-TR-14` abstained although retrieval had found the evidence. The record is a 1,977-word Codex session, and the PostGIS passage fell after word 350. This is a fix to how the evidence is built, not to the prompt.
+- **Revision 1.** `MEM-TR-08` answered "Yes" from Dana's report that John was fine cutting dark mode. John's own message asking to keep it was in the evidence. `MEM-TR-24`, `MEM-TR-09` and `MEM-TR-10` left out details the rubric needs.
+- **The train no-judge drop under revision 1** is `MEM-TR-11`. It now also mentions the 800 figure the speaker corrected away, so the no-judge scorer counts it as unverified. The judge marks it correct.
+
+The prompt names no person, company, channel or product from the data, and `tests/test_writer.py` checks that. The owner's name reaches the model from `ingest.ALEX_NAME`, in each request, not from the prompt template.
+
+One prompt revision is left in the budget of two.
+
+### The "current value first" rule, measured again
+
+Rule 6 is the prompt version of the current-value rule removed in step 1. It was measured on the questions it could affect: 9 train questions (knowledge update, time travel, correction, edited record, commitment status) and 5 frozen ones (time travel, open items). Both runs used step 2 retrieval, strict mode, no fallbacks, and the Qwen judge.
+
+| prompt | train no judge / judged (n=9) | frozen no judge / judged (n=5) |
+|---|---|---|
+| revision 1, with rule 6 | 88.9 / 94.4 | 60.0 / 60.0 |
+| revision 1, without rule 6 | 88.9 / 94.4 | 60.0 / 60.0 |
+
+Rule 6 makes no measurable difference. The same rows fail either way: `MEM-TR-04` is partial (the judge wants the deadline extension) and `MEM-TR-11` is unverified. On the frozen set, the two failures differ only in wording; the questions are the same. Rule 6 stays, because it is part of the prompt every scored run used. Removing it would mean a full re-run for no measured gain. The model follows the current value from the records without being told.
+
+### Groq free-tier limit
+
+`gpt-oss-120b` on the free tier allows 200,000 tokens a day, counted over a rolling 24 hours. One answer costs about 3,500 tokens, counting the evidence and the model's reasoning. So a full run of train and the frozen set (53 answers) uses most of a day's allowance. The writer's disk cache makes reruns with unchanged evidence free. When the shipped prompt was restored, both sets came back from the cache byte-identical to the scored revision-1 outputs. The frozen sets are unchanged from v1. Steps 2–4 have to win back the train losses with general mechanisms: the LLM writer for answers, anchor-first retrieval for "the day of X", and claim chains for "has / still".
+
+## Writer on OpenRouter
+
+The Groq writer runs above (`openai/gpt-oss-120b`) are kept as history. They are not the reported v2 result. The step 2 runs used step 2 retrieval. The run after step 3 was stopped part-way at Groq's daily token cap and is labelled partial in the scoring log. The final v2 answer numbers are to come from one complete pass of train and the frozen set with one model, after retrieval and the planner are final; that pass has not been run yet. The judge is unchanged: Qwen `qwen/qwen3.8-27b` on Groq, with its own quota and from a different model family.
+
+### Model
+
+`GET https://openrouter.ai/api/v1/models` listed 458 models. Six end in `:free` and accept JSON output (`response_format` or `structured_outputs`):
+
+| model | context | max output | structured outputs |
+|---|---|---|---|
+| `dots-studio/dots-3-note-preview:free` | 512,000 | 460,800 | yes |
+| `apodex/apodex-1.1-mini:free` | 262,144 | 235,929 | yes |
+| `google/gemma-4-26b-a4b-it:free` | 262,144 | 32,768 | no (JSON mode only) |
+| `google/gemma-4-31b-it:free` | 262,144 | 32,768 | no (JSON mode only) |
+| `nvidia/nemotron-3-super-120b-a12b:free` | 262,144 | 235,929 | yes |
+| `liquid/lfm-2.5-2.6b:free` | 65,536 | 8,192 | yes |
+
+Chosen: `nvidia/nemotron-3-super-120b-a12b:free`. It is not from the Qwen family. It supports structured outputs as well as JSON mode, and it is a full-size model. The others are a preview, a "mini", JSON mode only, or 2.6B. Its 262k context is far more than 8 trimmed records need; a request is about 2–3k tokens. The writer asks for `response_format: json_object` (`LLM_JSON_MODE=1`) and still parses leniently.
+
+### Limits
+
+From OpenRouter's limits page, read on 2026-10-12, and from `GET /api/v1/key` for this key:
+
+- Free (`:free`) models allow **20 requests a minute**.
+- They allow **50 requests a day** when less than 10 credits have been bought in total, and **1,000 a day** at 10 credits or more. The day is a UTC day, so the count resets at 05:30 IST.
+- The tier depends on credits bought in total, not on the current balance. A negative balance can return 402 even on free models.
+- This key reports `is_free_tier: true` and `free_model_daily_requests` with a limit of 50.
+
+One pass is 53 questions (27 train, 26 frozen), plus any retries, so it cannot finish within one UTC day at 50. A smoke test of one train question used one request; that answer is cached and reused by the full pass.
+
+### Client changes (not OpenRouter-only)
+
+- `HTTP-Referer` and `X-Title` are sent only when `LLM_HTTP_REFERER` and `LLM_X_TITLE` are set.
+- The key is read from `LLM_API_KEY`, or from `OPENROUTER_API_KEY` when `LLM_API_KEY` is blank. It is read from the environment or `.env` and never printed or logged.
+- JSON is found inside prose or a code fence. An unreadable reply is asked once more. If that also fails, the deterministic writer answers, and the answer is counted as a fallback (strict mode stops the run instead).
+- On 429 or 5xx the client honours `Retry-After` (up to 120 s), otherwise backs off. A 429 that reports the quota is spent until a reset more than 5 minutes away stops at once with the reset time, instead of retrying into the cap. `LLM_REQUESTS_PER_MINUTE=15` spaces requests under the 20-a-minute limit.
+- Counters: requests, retries, 429s, 5xx and parse retries are printed per run and written per question to the writer log. `CANDOR_WRITER_LEDGER` writes one line per HTTP attempt (time, model, outcome), so totals add up across restarts.
+
+### Cache key
+
+The key is a sha256 of: the prompt hash, the endpoint host, the model id, the question, `as_of`, and a sha256 of the exact user message. That message holds the owner, the time and every evidence block as sent. So an answer from another model, prompt, endpoint or evidence set cannot be read back. The endpoint host is new: before, the same model id on two providers would have shared entries. `tests/test_writer.py` checks that another model, or another endpoint, asks again.
+
+### Fewer tokens per question
+
+The writer now reads the top **8** trusted retrieved records (was 10). Each record is cut to **180 words** (was 350): its first 40 words plus the 40-word windows that share the most question terms, in their original order, with `[...]` at the gaps. Shorter records go in whole. `retrieved` is unchanged; only what the model reads is smaller. The cut changes every evidence hash, so no Groq-era answer can come back from the cache.
+
+### Where step 2 stands
+
+Step 2 is closed as built and checked on a partial sample. No complete judged pass of train and the frozen set exists with the current settings, because of the free tiers' daily limits. No improvement below is claimed as proven.
+
+What was built:
+
+- The writer returns structured JSON: `answerable`, `answer`, `source_ids`.
+- Source ids are kept only when they name a record the model was shown.
+- Deleted and quarantined records never reach the model.
+- With no key, or on any rejected reply, the deterministic writer answers. `test_no_settings_uses_the_deterministic_writer` and `test_bad_json_falls_back` test those two paths; `test_unreadable_reply_is_retried_once_then_falls_back` tests the retry before the fallback.
+- Replies are cached on disk, keyed by prompt hash, endpoint, model, question, time and the exact evidence.
+
+Two sets of writer numbers exist. They use different models and settings, so neither is a v2 result.
+
+**A. Complete pass, older settings, different model.** `openai/gpt-oss-120b` on Groq; step 2 retrieval; top 10 records at up to 350 words; prompt revision 1. Every answer came from the model, with no fallbacks. This is the "revision 1" row above.
+
+| | train (n=27) no judge / Qwen judge | frozen (n=26) no judge / Qwen judge |
+|---|---|---|
+| after step 1, deterministic writer | 70.4 / 63.0 | 23.1 / 17.3 |
+| A: gpt-oss-120b, revision 1 | 92.6 / 83.3 | 65.4 / 63.5 |
+
+**B. Partial sample, current settings.** `nvidia/nemotron-3-super-120b-a12b:free` on OpenRouter; retrieval as of the last step 3 run before this section; top 8 records at up to 180 words; prompt revision 1. Strict mode was on, so every answer came from the model or its cache. `retrieved` was byte-identical to the deterministic run on every answered question. The comparison row is the deterministic writer on the same retrieval and the same questions.
+
+| | train (n=27, complete) no judge / Qwen judge | frozen (14 of 26 answered) no judge / Qwen judge |
+|---|---|---|
+| deterministic writer, same retrieval | 66.7 / 59.3 | 21.4 / 14.3 |
+| B: Nemotron | 92.6 / 87.0 | 71.4 / 67.9 |
+
+On train, B's no-judge failure is `MEM-TR-12` (it abstained on an answerable temporal question). The judge also marks down `MEM-TR-04`, `MEM-TR-08` and `MEM-TR-10` (each leaves out a detail), and `MEM-TR-26` (it states a signing date the records do not give). The 14 frozen questions are the first 14 by file order, not a chosen subset. Twelve frozen answers are missing, so B's frozen number is not comparable with A's 26-question score.
+
+How the sample stopped. Two wrapper processes were running against the one key: the Groq-era run (whose child processes read `.env` again on each restart, so after the switch they called OpenRouter too) and the OpenRouter pass. The Groq-era wrapper was meant to be stopped at the switch and was not. Between them they used the 50-a-day allowance. Only the OpenRouter pass wrote the per-attempt ledger, which is why the key reported 54 requests used while the ledger shows 18. Both processes used the same model, prompt, settings and cache, so the answers above are valid model answers; but the request and retry totals for the sample are incomplete. Both are now stopped.
+
+Judge cost of the sample: 7 Qwen calls; every other verdict came from the judge cache.

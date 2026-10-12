@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 import unittest
 from datetime import datetime
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+os.environ["CANDOR_WRITER"] = "deterministic"
 
 from candor.answer import compose  # noqa: E402
 from candor.explain import explain_text  # noqa: E402
