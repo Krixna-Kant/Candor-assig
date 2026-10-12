@@ -46,7 +46,7 @@ _QUESTION = re.compile(
     r"^(what|when|who|why|how|where|is|are|did|do|does|has|have|can|could)\b",
     re.IGNORECASE,
 )
-_NOT_A_NAME = frozenset({"the", "a", "an", "and", "or", "weekly", "digest"})
+_NOT_A_NAME = frozenset({"the", "a", "an", "and", "or"})
 _GLUE = frozenset({
     "message", "email", "slack", "tell", "thank", "thanks", "remind", "book",
     "schedule", "move", "reschedule", "open", "channel", "about", "with",
@@ -164,7 +164,7 @@ def _remind(shown: list[Record], clause: str, as_of: datetime) -> dict:
 
 def _deliver(world: dict, shown: list[Record], clause: str, as_of: datetime) -> dict:
     channel = _channel(clause, world["channels"])
-    body = _with_figures(clause, _utterance(clause), shown)
+    body = _utterance(clause)
     if channel:
         return {"type": "slack.send_message", "args": {"to": channel, "text": body}}
 
@@ -330,39 +330,6 @@ def _utterance(clause: str) -> str:
     if match:
         return match.group(1).rstrip(".")
     return clause
-
-
-def _with_figures(clause: str, body: str, shown: list[Record]) -> str:
-    """A capitalized figure in the command is filled from the latest visible record."""
-    for term in re.findall(r"\b[A-Z]{2,5}\b", clause):
-        figure = _latest_figure(shown, term)
-        if figure and figure not in body:
-            sentence = f"The current {term} is {figure}."
-            body = sentence if body == clause else f"{body} {sentence}"
-    return body
-
-
-def _latest_figure(shown: list[Record], term: str) -> str | None:
-    """The number in the latest visible record that actually states one."""
-    found: list[tuple[datetime, str]] = []
-    for record in shown:
-        if is_untrusted(record):
-            continue
-        figure = _figure_in(record.text, term)
-        if figure:
-            found.append((record.event_time, figure))
-    if not found:
-        return None
-    found.sort(key=lambda item: item[0])
-    return found[-1][1]
-
-
-def _figure_in(text: str, term: str) -> str | None:
-    match = re.search(rf"\b{re.escape(term)}\b\s+is\s+(\d+)", text, re.IGNORECASE)
-    if match:
-        return match.group(1)
-    match = re.search(rf"(\d+)\s*(?:%|percent)\s+{re.escape(term)}\b", text, re.IGNORECASE)
-    return match.group(1) if match else None
 
 
 def _reminder_text(clause: str) -> str:

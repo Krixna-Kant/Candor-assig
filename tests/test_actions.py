@@ -66,21 +66,6 @@ class ActionTests(unittest.TestCase):
         self.assertIn("[REDACTED]", blob)
         self.assertEqual(actions[0]["type"], "slack.send_message")
 
-    def test_figure_follows_as_of(self):
-        before = plan(
-            self.corpus,
-            "Email John the corrected NRR",
-            datetime.fromisoformat("2026-09-16T10:00:00-07:00"),
-        )
-        after = plan(
-            self.corpus,
-            "Email John the corrected NRR",
-            datetime.fromisoformat("2026-09-16T12:00:00-07:00"),
-        )
-        self.assertIn("118", before[0]["args"]["body"])
-        self.assertNotIn("112", before[0]["args"]["body"])
-        self.assertIn("112", after[0]["args"]["body"])
-
     def test_train_commands_carry_no_key(self):
         with open("evals/actions_train.jsonl", encoding="utf-8") as handle:
             rows = [json.loads(line) for line in handle if line.strip()]

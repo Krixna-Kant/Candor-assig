@@ -1,7 +1,7 @@
 """Time filter, then BM25, entities, chains, and a per-parent cap.
 
-`chain_width` is how many extra records a seed may pull in: later mentions of
-the same terms, same-channel neighbors within three days, and same-thread mail.
+`chain_width` is how many extra records a seed may pull in: same-channel
+neighbors within three days, and same-thread mail.
 The cap stops one meeting from filling the top of the list.
 """
 
@@ -56,12 +56,8 @@ def retrieve(
         (_adjust(score, record, question, directory), record)
         for score, record in base
     ]
-    if kind == "current":
-        adjusted = _prefer_later_dated(adjusted, pool)
     lexical = sorted(adjusted, key=lambda item: -item[0])
     top_score = lexical[0][0] if lexical else 1.0
-    if kind == "current":
-        adjusted.extend(_latest(pool, query_terms, chain_width, top_score, question))
     adjusted.extend(_cued(pool, question, top_score))
     best: dict[str, tuple[float, Record]] = {}
     for score, record in adjusted:
@@ -111,8 +107,6 @@ def _kind(question: str) -> str:
         return "cause"
     if "calendar" in lowered:
         return "calendar"
-    if re.search(r"\b(when is|what is our|what's our|do i still|has |have we)\b", lowered):
-        return "current"
     return "general"
 
 
@@ -148,50 +142,6 @@ def _source_factor(question: str, record: Record) -> float:
     if asked and (record.event_time.month, record.event_time.day) in asked:
         factor *= 3.0
     return factor
-
-
-def _prefer_later_dated(rows: list[tuple[float, Record]], pool: list[Record]) -> list[tuple[float, Record]]:
-    """A 'when is' question wants the later statement that actually names a date.
-
-    The delivery timestamp on every unit is ignored. Only a date written in the body counts,
-    so 'launch week' does not beat 'October 21'.
-    """
-    times = [record.available_at for record in pool]
-    earliest, latest = min(times), max(times)
-    span = max((latest - earliest).total_seconds(), 1.0)
-    rescored = []
-    for score, record in rows:
-        position = (record.available_at - earliest).total_seconds() / span
-        factor = 0.75 + 0.7 * position
-        if _DATE.search(record.body or "") or _ISO.search(record.body or ""):
-            factor *= 1.35
-        rescored.append((score * factor, record))
-    return rescored
-
-
-def _latest(pool: list[Record], query_terms: set[str], chain_width: int, top_score: float, question: str) -> list[tuple[float, Record]]:
-    """Current-state slot: the latest units that contain the rarest query term."""
-    if chain_width <= 0 or not query_terms:
-        return []
-    tokenized = [(record, set(analyze(record.text, stem=True))) for record in pool]
-    frequency: Counter[str] = Counter()
-    for _record, tokens in tokenized:
-        frequency.update(tokens)
-    useful = [term for term in query_terms if frequency[term]]
-    if not useful:
-        return []
-    rarest = min(useful, key=lambda term: (frequency[term], term))
-    hits = []
-    for record, tokens in tokenized:
-        if rarest not in tokens:
-            continue
-        if frequency[rarest] > 25 and len(tokens & query_terms) < 2:
-            continue
-        if is_untrusted(record) and not question_is_about_untrusted(question):
-            continue
-        hits.append(record)
-    hits.sort(key=lambda record: record.available_at, reverse=True)
-    return [(top_score * (0.7 - 0.02 * offset), record) for offset, record in enumerate(hits[:chain_width])]
 
 
 def _cued(pool: list[Record], question: str, top_score: float) -> list[tuple[float, Record]]:
@@ -282,18 +232,8 @@ def _expand(seeds, by_channel, by_thread, query_terms, chain_width, seen, questi
 
 
 def _calendar_on_day(question: str, pool: list[Record], ranked: list[tuple[float, Record]], chain_width: int) -> list[tuple[float, Record]]:
-    """Events whose start falls on a date the question names, or on a travel day in evidence."""
+    """Events whose start falls on a date the question names."""
     dates = set(_dates(question))
-    lowered = question.lower()
-    if not dates and (re.search(r"fly|flight|travel", lowered) or _asks_about_a_day(question)):
-        for _score, record in ranked[:40]:
-            if record.source == "calendar":
-                continue
-            text = record.text.lower()
-            if "flight" in text or "united" in text or "depart" in text:
-                dates.update(_dates(record.text))
-                if dates:
-                    break
     if not dates:
         return []
     top = ranked[0][0] if ranked else 1.0
