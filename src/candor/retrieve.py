@@ -13,6 +13,10 @@ from datetime import datetime, timedelta
 
 from candor.bm25 import rank, scored
 from candor.entities import Directory, build_directory
+from candor.hops import (
+    around, asks_open_items, find_anchor, join_query, meeting_starts, open_items, resolve, rrf, wrong_side,
+)
+from candor.ingest import ALEX_NAME
 from candor.models import Corpus, Record
 from candor.textnorm import analyze, learn_lexicon
 from candor.timeline import visible
@@ -29,6 +33,8 @@ _DATE = re.compile(
     re.IGNORECASE,
 )
 _ISO = re.compile(r"\b(\d{4})-(\d{2})-(\d{2})\b")
+JOIN_WEIGHT = 0.5
+_STATUS = re.compile(r"^\s*(has|have|is|are|did|does|do)\b|\b(yet|still|so far|status)\b", re.IGNORECASE)
 
 
 def retrieve(
@@ -40,8 +46,13 @@ def retrieve(
     limit: int = 20,
     chain_width: int = 3,
     parent_cap: int = 3,
+    trace: dict | None = None,
 ) -> list[Record]:
-    """Best-first units that exist at `as_of`. Plain mode is BM25 only."""
+    """Best-first units that exist at `as_of`. Plain mode is BM25 only.
+
+    `trace`, when given, is filled with what each hop did, for `explain`.
+    """
+    trace = {} if trace is None else trace
     pool = visible(corpus, as_of)
     _ensure_lexicon(corpus)
     if not stem:
@@ -58,7 +69,18 @@ def retrieve(
     ]
     lexical = sorted(adjusted, key=lambda item: -item[0])
     top_score = lexical[0][0] if lexical else 1.0
-    adjusted.extend(_cued(pool, question, top_score))
+    added: set[str] = set()
+    cued = _cued(pool, question, top_score)
+    adjusted.extend(cued)
+    adjusted, anchored = _anchored(question, pool, adjusted, top_score, chain_width)
+    pending = _pending(question, pool, top_score, chain_width)
+    adjusted.extend(pending)
+    added.update(record.id for _score, record in cued + anchored + pending)
+    anchor = find_anchor(question)
+    if anchor and anchored:
+        trace["anchor"] = (anchor.phrase, anchor.direction, anchored[0][1].id, [record.id for _s, record in anchored[1:]])
+    if pending:
+        trace["open_items"] = [record.id for _score, record in pending]
     best: dict[str, tuple[float, Record]] = {}
     for score, record in adjusted:
         current = best.get(record.id)
@@ -71,11 +93,43 @@ def retrieve(
     seeds = [(score_of[record.id], record) for record in diverse[:5]]
     # An email can sit just outside the top and still be the start of the thread that answers it.
     seeds.extend((score_of[record.id], record) for record in diverse if record.source == "gmail")
-    adjusted.extend(_neighbors(seeds, pool, query_terms, chain_width, question))
+    neighbors = _neighbors(seeds, pool, query_terms, chain_width, question)
+    adjusted.extend(neighbors)
+    added.update(record.id for _score, record in neighbors)
     if kind == "calendar" or _asks_about_a_day(question):
-        adjusted.extend(_calendar_on_day(question, pool, adjusted, chain_width))
+        on_day = _calendar_on_day(question, pool, adjusted, chain_width)
+        adjusted.extend(on_day)
+        added.update(record.id for _score, record in on_day)
     adjusted.sort(key=lambda item: -item[0])
-    return _cap(adjusted, parent_cap, limit)
+    return _joined(question, pool, adjusted, added, directory, parent_cap, limit, trace)
+
+
+def _joined(question, pool, adjusted, added, directory, parent_cap, limit, trace) -> list[Record]:
+    """Search again with the terms the best records share, and merge the two rankings by rank.
+
+    A record a hop added (anchor, thread, calendar day) was not found by words, so the second
+    search cannot judge it; it keeps its first-ranking place in the second ranking too.
+    """
+    direct = _cap(adjusted, parent_cap, max(limit, 40))
+    query = join_query(question, [record for record in _cap(adjusted, 1, 5) if not is_untrusted(record)], pool)
+    if query is None:
+        return direct[:limit]
+    trace["join_terms"] = query[len(question):].split()
+    second = [
+        (_adjust(score, record, question, directory), record)
+        for score, record in scored(pool, query, stem=True, windows=True)
+    ]
+    second.sort(key=lambda item: -item[0])
+    again = [record for record in _cap(second, parent_cap, 40) if record.id not in added]
+    for position, record in enumerate(direct):
+        if record.id in added:
+            again.insert(min(position, len(again)), record)
+    merged = rrf([(direct, 1.0), (again, JOIN_WEIGHT)])
+    return _cap(merged, parent_cap, limit)
+
+
+def _asks_status(question: str) -> bool:
+    return bool(_STATUS.search(question))
 
 
 def _ensure_lexicon(corpus: Corpus) -> None:
@@ -142,6 +196,30 @@ def _source_factor(question: str, record: Record) -> float:
     if asked and (record.event_time.month, record.event_time.day) in asked:
         factor *= 3.0
     return factor
+
+
+def _anchored(question, pool, adjusted, top_score, chain_width):
+    """'After X' or 'the day of X': find X, then rank what sits on the asked side of it."""
+    anchor = find_anchor(question)
+    if anchor is None:
+        return adjusted, []
+    resolved = resolve(anchor, pool, meeting_starts(pool))
+    if resolved is None:
+        return adjusted, []
+    record, when = resolved
+    kept = [(score * (0.6 if wrong_side(anchor, record, when, other) else 1.0), other) for score, other in adjusted]
+    added = [(top_score * 0.9, record)]
+    for index, (_score, other) in enumerate(around(anchor, record, when, question, pool)[:chain_width]):
+        added.append((top_score * (0.7 - 0.01 * index), other))
+    return kept + added, added
+
+
+def _pending(question, pool, top_score, chain_width) -> list[tuple[float, Record]]:
+    """'What do I still owe': requests and promises that no later record completes."""
+    if not asks_open_items(question):
+        return []
+    found = open_items(question, pool, ALEX_NAME)
+    return [(top_score * (0.85 - 0.01 * index), record) for index, record in enumerate(found[: chain_width + 3])]
 
 
 def _cued(pool: list[Record], question: str, top_score: float) -> list[tuple[float, Record]]:
@@ -214,6 +292,9 @@ def _expand(seeds, by_channel, by_thread, query_terms, chain_width, seen, questi
         # A Slack neighbor is only a candidate and sits lower.
         if hop == 1 and seed.source == "gmail":
             weight = 0.98
+        newest = None
+        if seed.source == "gmail" and candidates and candidates[0][1] > seed.event_time and _asks_status(question):
+            newest = candidates[0][2].id
         elif hop == 1:
             weight = 0.72
         else:
@@ -224,7 +305,8 @@ def _expand(seeds, by_channel, by_thread, query_terms, chain_width, seen, questi
             if is_untrusted(other) and not question_is_about_untrusted(question):
                 continue
             seen.add(other.id)
-            forced.append((score * weight, other))
+            # The newest message in a thread is its current state, which is what a status question asks.
+            forced.append((score * (1.01 if other.id == newest else weight), other))
             picked += 1
             if picked >= chain_width:
                 break

@@ -15,7 +15,8 @@ from candor.writer import evidence, respond
 def explain_text(corpus: Corpus, question: str, as_of: datetime) -> str:
     """Plain text a person can read. Does not change retrieval or the answer."""
     pool = visible(corpus, as_of)
-    ranked = retrieve(corpus, question, as_of, stem=True)
+    trace: dict = {}
+    ranked = retrieve(corpus, question, as_of, stem=True, trace=trace)
     answer, sources, abstained, origin = respond(corpus, question, as_of, ranked)
     answer = redact(answer)
     query = set(analyze(question, stem=True, expand=True))
@@ -32,6 +33,9 @@ def explain_text(corpus: Corpus, question: str, as_of: datetime) -> str:
         f"Writer: {origin.split(':', 1)[0]}",
         f"Records a model may read: {', '.join(shown) if shown else '(none)'}",
         "",
+        "Retrieval hops",
+        *_hops(trace),
+        "",
         "Retrieved, best first",
     ]
     for index, record in enumerate(ranked[:8], start=1):
@@ -41,6 +45,18 @@ def explain_text(corpus: Corpus, question: str, as_of: datetime) -> str:
     if not ranked:
         lines.append("(nothing retrieved)")
     return "\n".join(lines) + "\n"
+
+
+def _hops(trace: dict) -> list[str]:
+    lines = []
+    if "anchor" in trace:
+        phrase, direction, anchor_id, near = trace["anchor"]
+        lines.append(f"Anchor: '{phrase}' ({direction}) resolved to {anchor_id}; added {', '.join(near) or '(none)'}")
+    if "open_items" in trace:
+        lines.append(f"Open items (no later completion): {', '.join(trace['open_items'])}")
+    if "join_terms" in trace:
+        lines.append(f"Second search added: {' '.join(trace['join_terms'])}")
+    return lines or ["(none)"]
 
 
 def _why(record: Record, query: set[str]) -> str:

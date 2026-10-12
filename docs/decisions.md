@@ -41,6 +41,8 @@ Every id in `needed`, `evidence` and `also_supports` was checked with `eval_harn
 
 These sets are not truly held out. The same assistant that will change the code also wrote them. They are frozen so that this cannot change after the fact. They are not edited after this commit.
 
+**Status after steps 2–4: these are development sets now.** Retrieval was scored and iterated against the memory set, with per-question pass/fail read for step 3. The commands in the action set were known while the planner was built. Their scores below are development scores. A separate holdout, written outside this working session and never opened here, is scored once at the end; that is the closest thing to a hidden-set estimate.
+
 | file | sha256 |
 |---|---|
 | `evals/v2_memory.jsonl` | `983c9a4e7bcfedd2af19d1cbc034a2862775bb1ddcd6847aa9beccf657a9c835` |
@@ -246,18 +248,125 @@ Two sets of writer numbers exist. They use different models and settings, so nei
 
 | | train (n=27) no judge / Qwen judge | frozen (n=26) no judge / Qwen judge |
 |---|---|---|
-| after step 1, deterministic writer | 70.4 / 63.0 | 23.1 / 17.3 |
-| A: gpt-oss-120b, revision 1 | 92.6 / 83.3 | 65.4 / 63.5 |
+| after step 1, deterministic writer | 19/27 = 70.4 / 17/27 = 63.0 | 6/26 = 23.1 / 4.5/26 = 17.3 |
+| A: gpt-oss-120b, revision 1 | 25/27 = 92.6 / 22.5/27 = 83.3 | 17/26 = 65.4 / 16.5/26 = 63.5 |
 
 **B. Partial sample, current settings.** `nvidia/nemotron-3-super-120b-a12b:free` on OpenRouter; retrieval as of the last step 3 run before this section; top 8 records at up to 180 words; prompt revision 1. Strict mode was on, so every answer came from the model or its cache. `retrieved` was byte-identical to the deterministic run on every answered question. The comparison row is the deterministic writer on the same retrieval and the same questions.
 
 | | train (n=27, complete) no judge / Qwen judge | frozen (14 of 26 answered) no judge / Qwen judge |
 |---|---|---|
-| deterministic writer, same retrieval | 66.7 / 59.3 | 21.4 / 14.3 |
-| B: Nemotron | 92.6 / 87.0 | 71.4 / 67.9 |
+| deterministic writer, same retrieval | 18/27 = 66.7 / 16/27 = 59.3 | 3/14 = 21.4 / 2/14 = 14.3 |
+| B: Nemotron | 25/27 = 92.6 / 23.5/27 = 87.0 | 10/14 = 71.4 / 9.5/14 = 67.9 |
+
+Counts are strict scores: a partial answer counts as half. Train for B is all 27 questions. An earlier summary said 18 train answers, but 18 was the number of requests in the per-attempt log, not the number of answers. The other answers came from the writer cache, written by the second process described below with the same model. The cache key holds the prompt hash, endpoint, model and a hash of the exact evidence, so a cached answer is read back only when all of those match.
 
 On train, B's no-judge failure is `MEM-TR-12` (it abstained on an answerable temporal question). The judge also marks down `MEM-TR-04`, `MEM-TR-08` and `MEM-TR-10` (each leaves out a detail), and `MEM-TR-26` (it states a signing date the records do not give). The 14 frozen questions are the first 14 by file order, not a chosen subset. Twelve frozen answers are missing, so B's frozen number is not comparable with A's 26-question score.
 
-How the sample stopped. Two wrapper processes were running against the one key: the Groq-era run (whose child processes read `.env` again on each restart, so after the switch they called OpenRouter too) and the OpenRouter pass. The Groq-era wrapper was meant to be stopped at the switch and was not. Between them they used the 50-a-day allowance. Only the OpenRouter pass wrote the per-attempt ledger, which is why the key reported 54 requests used while the ledger shows 18. Both processes used the same model, prompt, settings and cache, so the answers above are valid model answers; but the request and retry totals for the sample are incomplete. Both are now stopped.
+How the sample stopped. Two wrapper processes were running against the one key: the Groq-era run (whose child processes read `.env` again on each restart, so after the switch they called OpenRouter too) and the OpenRouter pass. The Groq-era wrapper was meant to be stopped at the switch and was not. Between them they used the 50-a-day allowance. Only the OpenRouter pass wrote the per-attempt ledger, which is why the key reported 54 requests used while the ledger shows 18. Both processes used the same model, prompt, settings and cache, so the answers above are valid model answers; but the request and retry totals for the sample are incomplete. Both are now stopped. From here on, runs are not left looping in the background: every run is started once, and all Python processes are listed with their command lines before and after any long run.
 
 Judge cost of the sample: 7 Qwen calls; every other verdict came from the judge cache.
+
+## Step 3: deterministic retrieval
+
+Retrieval uses no model. Every number below is the share of questions where each needed group has a member in the top 10, scored with the deterministic writer.
+
+### Anchor-first ("after / before / since / following / until X")
+
+`hops.find_anchor` reads the anchor phrase and its direction from the question. It also reads an offset when one is given ("the day after X"). `hops.resolve` finds the anchor event in the records visible at the question time. For a day anchor, it takes the first of the top three hits that is a calendar entry or states a date on or after its own; otherwise it takes the top hit, using the meeting start for a meeting. Records on the wrong side of the anchor are scored at 0.6. The anchor record is added near the top. The best matches for the rest of the question on the right side of the anchor are added below it: "after" has no upper bound, and "before" looks back 7 days.
+
+| run | change | train | probe | frozen |
+|---|---|---|---|---|
+| step 2 rev 1 | none (baseline) | 92.0 | 57.1 | 73.9 |
+| first anchor | "after" window 3 days, anchor preferred event records | 88.0 | — | — |
+| general anchor | rules above, `chain_width + 2` added records at 0.8 of the top score | 92.0 | 64.3 | 73.9 |
+| lighter anchor | `chain_width` added records at 0.7 | 96.0 | 64.3 | 73.9 |
+
+The first version broke `MEM-TR-12` ("how many days after the Acme call…"), because the 3-day window cut off the reply. The general version still broke it. The anchor resolves to the "Acme call prep" calendar entry, two hours before the call, so the call's own transcript segments counted as "after" it. Added at 0.8, they pushed the proposal email out of the top 10. Added at 0.7, they rank below records the ordinary ranking already scored well. `MEM-TR-25` and its probe paraphrase now pass. The frozen score did not move, and 4 frozen questions have a different top 10.
+
+### Second hop for joins
+
+`hops.join_query` takes the top five trusted records, one per parent. It adds to the question up to six terms that at least two of those records share, rarest first; a term found in only one record is left out as noise. A second word search runs with that query. The two rankings are merged by reciprocal rank (k = 60), with the second given half weight, and the per-parent cap is applied again. This runs on every question, with no gate on the question's wording.
+
+| run | change | train | probe | frozen (top 10 / top 20) |
+|---|---|---|---|---|
+| lighter anchor | before the join | 96.0 | 64.3 | 73.9 / 74 |
+| join at the end | merged after every other step | 96.0 | 78.6 | 73.9 / 74 |
+| keep top five | top five of the first search fixed | 96.0 | 64.3 | 73.9 / 74 |
+| join first | merged before the anchor, thread and calendar steps | 92.0 | 78.6 | 69.6 / 74 |
+| hop records keep their place | records added by the anchor, thread or calendar steps keep their first-ranking position in the second ranking | 96.0 | 85.7 | 73.9 / 78 |
+
+Shipped: the last row. "Join at the end" broke `MEM-PR-25` (the day of a trip). The calendar entry for that day was added by the calendar step, not found by words. The second search could not find it either, so the merge pushed it out. A record a step added was never a word match, so the second search has no say over it. Probe top-20 recall went from 79% back to 100%.
+
+Still failing: `MEM-TR-26` and `MEM-PR-26` ("has Acme signed / given us a yes"). The acknowledgement says neither word. Also `MEM-PR-21` ("what caused the date to move"): the cause is in records that share few words with the question.
+
+### Open items
+
+The step runs when the question asks what is open, outstanding, pending, owed or still to do. `hops.commitments` reads trusted records and finds sentences that either promise a task ("I'll / we'll / let me" plus a task verb) or request one ("can you / please" plus a task verb). It skips:
+
+- sentences with a negation;
+- assistant chats (ChatGPT, Codex) and calendar entries;
+- mail from role addresses (newsletters, partners@, no-reply).
+
+A request counts as the owner's to do only when it reaches the owner directly: a DM or two-person thread, or one that names the owner. `hops.completed` closes a commitment when a later record by the person who owes it shares at least two of its terms and says it happened (sent, attached, done, here's…). Names are compared without the email address, so a promise made in a meeting can be closed by an email. If the question asks what *I* owe, only the owner's debts are kept. The open items are added below the anchor records and kept in place by the join step.
+
+On the data as of Sep 18 it finds 45 commitments, and 26 of them are open. I read the list by eye: the open ones are real tasks, and the cases above are why each skip exists.
+
+| run | train | probe | frozen (top 10 / top 20) |
+|---|---|---|---|
+| hop records keep their place | 96.0 | 85.7 | 73.9 / 78 |
+| + open items | 96.0 | 85.7 | 73.9 / 74 |
+
+No train or probe question lists open items, so the development sets can't measure this step. Only `MEM-TR-06` triggers it, and it still passes. Frozen top-20 recall fell from 78% to 74%, which suggests the step fires on some frozen questions that aren't about open items. I left the trigger as it is: narrowing it because of a frozen number would be fitting to the frozen set. Frozen top-10 did not change.
+
+### A cache bug the hop tests found
+
+`hops.tokens` first cached a record's words by id alone. An edited Slack message keeps its id, but its text depends on the question time, so the cache could return words from the wrong time. It is now keyed on id and text. Scores were the same after the fix.
+
+### Status questions read the newest reply in a thread
+
+`MEM-TR-26` ("Has Acme signed the contract?") placed the acknowledgement email 11th. The thread step had already added it, as a reply to the proposal email at 0.98 of the proposal's score, and the merge left it just below the cut. The newest records that mention Acme are go/no-go meeting segments, so "the newest record sharing the question's rarest terms" would not have found it; that idea was dropped before coding. The rule that does find it is about threads, not words. When the question asks for a current state (it starts with has / have / is / are / did / does / do, or says yet / still / so far / status), the newest reply in an email thread that a top hit belongs to is scored just above that hit (×1.01 instead of ×0.98). The newest message in a thread is its current state. It names no person, company or word from the data. `tests/test_hops.py` checks both the status case and the ordinary case.
+
+| run | train | probe | frozen (top 10 / top 20) |
+|---|---|---|---|
+| + open items | 96.0 | 85.7 | 73.9 / 74 |
+| + newest reply for status questions | 100 | 85.7 | 73.9 / 74 |
+
+Actions were rescored, because "message from memory" uses retrieval: unchanged on every set.
+
+`MEM-PR-26`, the probe paraphrase ("Did Acme Freight give us a yes on the deal yet?"), still fails. No email reaches its top 20, because "a yes on the deal" shares no words with "proposal", so the thread rule never fires. Closing that gap would mean fitting to the probe wording, so it was left failing.
+
+`MEM-TR-25` ("the day of X") is handled by the general anchor step above. The anchor phrase and its offset are read from the wording ("the day of", "the day after", "after", "before", "since", "following", "until"). The anchor event is found by an ordinary search, and that day's calendar entries come from the calendar step. Nothing in it names the train event.
+
+### Checks on the final step 3 retrieval
+
+Each set was run twice with the deterministic writer. The two outputs are byte-identical on train, probe and frozen. No question in any of the three sets has a forbidden record in its top 10, and none is retrieved in any top 20.
+
+Per question, against retrieval before step 3 (step 2, revision 1):
+
+| set | now passes | now fails |
+|---|---|---|
+| train | `MEM-TR-25` (temporal, anchor), `MEM-TR-26` (status thread) | none |
+| probe | `MEM-PR-25` (temporal, anchor), `MEM-PR-02`, `MEM-PR-05`, `MEM-PR-10` (join) | none |
+| frozen | none | none |
+
+Frozen retrieval by category (top 10, pass/fail only; 3 abstention questions are not scored):
+
+| category | ids |
+|---|---|
+| anchor_relative | `MEM-V2-02` pass, `MEM-V2-18` pass, `MEM-V2-26` pass |
+| as_of_time_travel | `MEM-V2-11` pass, `MEM-V2-24` pass |
+| cross_source | `MEM-V2-19` pass |
+| disagreement | `MEM-V2-10` pass |
+| multi_hop | `MEM-V2-21` FAIL |
+| open_items | `MEM-V2-05` pass, `MEM-V2-06` FAIL, `MEM-V2-23` FAIL |
+| ownership | `MEM-V2-13` FAIL |
+| reported_speech | `MEM-V2-01` FAIL |
+| single_fact | `MEM-V2-04` pass, `MEM-V2-14` pass, `MEM-V2-25` FAIL |
+| temporal | `MEM-V2-03` pass, `MEM-V2-20` pass |
+| uncertain_speaker | `MEM-V2-22` pass |
+| work_app | `MEM-V2-15` pass, `MEM-V2-16` pass, `MEM-V2-17` pass |
+| yes_no | `MEM-V2-12` pass |
+
+No frozen join, "after X" or open-items question improved. The three anchor questions passed before step 3 and still pass. The multi-hop question and two of the three open-items questions failed before and still fail. No frozen question changed in either direction, at top 10 or at top 20.
+
+**The step 3 gains are fitted to the development sets.** The probe was used to choose between the join variants (78.6 against 85.7), and every mechanism was designed from a train or probe failure. So the probe is no longer a held-out check, and the train and probe gains do not show that the mechanisms generalise. The only held-out evidence is the frozen set, and it did not move. The frozen revision allowed after this report was not used. Building one from failing frozen ids and categories would be tuning to the frozen set, and nothing in the development sets points to a change.
