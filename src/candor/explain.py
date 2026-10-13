@@ -20,7 +20,7 @@ def explain_text(corpus: Corpus, question: str, as_of: datetime) -> str:
     answer, sources, abstained, origin = respond(corpus, question, as_of, ranked)
     answer = redact(answer)
     query = set(analyze(question, stem=True, expand=True))
-    shown = [record.id for record in evidence(ranked)]
+    shown = [record.id for record in evidence(ranked, pool)]
     lines = [
         f"Question: {question}",
         f"As of: {as_of.isoformat()}",

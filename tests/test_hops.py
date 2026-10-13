@@ -74,6 +74,14 @@ class OpenItemTests(unittest.TestCase):
         self.assertEqual([item.record.id for item in items], ["P"])
         self.assertTrue(hops.completed(items[0], [promise, done]))
 
+    def test_a_promise_without_a_subject(self):
+        pool = [
+            _record("P", "👍 will send the pricing sheet tonight", author="Kim Peer"),
+            _record("Q", "The team will send nothing new.", author="Kim Peer", hours=1),
+            _record("R", "Who will review it?", author="Kim Peer", hours=2),
+        ]
+        self.assertEqual([item.record.id for item in hops.commitments(pool, OWNER)], ["P"])
+
     def test_someone_else_does_not_close_it(self):
         promise = _record("P", "I'll send the vendor contract draft tomorrow.", author="Kim Peer")
         other = _record("D", "Sent the vendor contract draft.", author="Lee Third", hours=20)

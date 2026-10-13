@@ -1,7 +1,8 @@
 """Answer text from the retrieved records, written by an OpenAI-compatible model.
 
-The model sees only the top retrieved records that are trusted and exist at
-`as_of`, with their text as of then and key-shaped tokens redacted. Each record
+The model sees only trusted records that exist at `as_of`: the top retrieved
+ones, each followed by the next records of its conversation, with their text as
+of then and key-shaped tokens redacted. Each record
 sits in a delimited block, and the prompt says block contents are data. The
 model has no tools. Its source ids are checked against the blocks it was shown.
 
@@ -29,12 +30,15 @@ from candor.ingest import ALEX_NAME
 from candor.models import Corpus, Record
 from candor.redact import has_key_shape, redact
 from candor.textnorm import analyze
+from candor.timeline import visible
 from candor.trust import is_untrusted
 
 LA = ZoneInfo("America/Los_Angeles")
 ROOT = Path(__file__).resolve().parents[2]
 CACHE = ROOT / ".cache" / "writer"
 EVIDENCE_LIMIT = 8
+CONTEXT_PARENTS = 3
+FOLLOW = 2
 RECORD_WORDS = 180
 WINDOW_WORDS = 40
 ANSWER_WORDS = 90
@@ -138,9 +142,35 @@ def respond(
     return answer, sources, abstained, origin
 
 
-def evidence(ranked: list[Record]) -> list[Record]:
-    """The top retrieved records a model may read. Planted instructions are left out."""
-    return [record for record in ranked if not is_untrusted(record)][:EVIDENCE_LIMIT]
+def evidence(ranked: list[Record], pool: list[Record] | None = None) -> list[Record]:
+    """The records a model may read. Planted instructions are left out.
+
+    These are the top retrieved records, best first. With `pool`, the records
+    visible at `as_of`, each of them in the first CONTEXT_PARENTS conversations
+    is followed by up to FOLLOW records sent after it in that conversation: a
+    reply can answer a question without repeating any of its words.
+    """
+    top = [record for record in ranked if not is_untrusted(record)][:EVIDENCE_LIMIT]
+    if pool is None:
+        return top
+    parents = list(dict.fromkeys(record.parent_id for record in top))[:CONTEXT_PARENTS]
+    threads: dict[str, list[Record]] = {}
+    for record in pool:
+        if record.parent_id in parents and not is_untrusted(record):
+            threads.setdefault(record.parent_id, []).append(record)
+    taken = {record.id for record in top}
+    shown = []
+    for record in top:
+        shown.append(record)
+        thread = threads.get(record.parent_id, [])
+        place = next((index for index, member in enumerate(thread) if member.id == record.id), None)
+        if place is None:
+            continue
+        for follower in thread[place + 1:place + 1 + FOLLOW]:
+            if follower.id not in taken:
+                shown.append(follower)
+                taken.add(follower.id)
+    return shown
 
 
 def blocks(records: list[Record], question: str = "") -> str:
@@ -193,7 +223,7 @@ def user_message(question: str, as_of: datetime, records: list[Record]) -> str:
 
 
 def _model_answer(corpus, question, as_of, ranked, config: Settings, transport):
-    shown = evidence(ranked)
+    shown = evidence(ranked, visible(corpus, as_of))
     if not shown:
         return ABSTAIN, [], True, "model"
     message = user_message(question, as_of, shown)

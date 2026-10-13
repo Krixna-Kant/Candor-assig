@@ -159,7 +159,9 @@ _TASK = (
     r"|update|review|schedule|intro|introduce|forward|confirm|fix|finish|file|prepare|spin up)"
 )
 _PROMISE = re.compile(
-    r"\b(?:i'?ll|i will|i'?m going to|i can|let me|we'?ll|we will)\s+(?:\w+\s+)?" + _TASK + r"\b", re.IGNORECASE,
+    r"(?:\b(?:i'?ll|i will|i'?m going to|i can|let me|we'?ll|we will)|^\W*(?:will|gonna|going to))\s+(?:\w+\s+)?"
+    + _TASK + r"\b",
+    re.IGNORECASE,
 )
 _REQUEST = re.compile(
     r"\b(?:can you|could you|would you|please|need you to|mind)\s+(?:\w+\s+)?" + _TASK, re.IGNORECASE,
