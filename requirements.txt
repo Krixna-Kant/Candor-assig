@@ -1,1 +1,3 @@
 # The memory command uses the Python 3.10+ standard library only.
+# Windows has no system time zone database, which zoneinfo needs.
+tzdata; sys_platform == "win32"

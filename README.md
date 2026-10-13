@@ -67,7 +67,7 @@ Outside reviews suggested hybrid search, rerankers, wider writer context, extrac
 
 ## Run
 
-Python 3.10 or newer; the standard library is enough. From a clean checkout on macOS or Linux:
+Python 3.10 or newer; the standard library is enough on macOS and Linux. On Windows, `requirements.txt` adds `tzdata`, because Windows has no system time zone database. From a clean checkout:
 
 ```sh
 sh run.sh
