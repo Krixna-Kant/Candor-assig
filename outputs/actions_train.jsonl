@@ -7,6 +7,6 @@
 {"id": "ACT-TR-07", "actions": [{"type": "calendar.create_event", "args": {"title": "NRR fix", "start": "2026-09-17T14:00:00-07:00", "end": "2026-09-17T14:30:00-07:00", "attendees": ["ben@brightline.example.com"]}}]}
 {"id": "ACT-TR-08", "actions": [{"type": "memory.ask", "args": {"question": "What's our launch date again?"}}]}
 {"id": "ACT-TR-09", "actions": [{"type": "gmail.send", "args": {"to": ["sarah.patel@acmefreight.example.com"], "subject": "pricing proposal", "body": "the pricing proposal"}}]}
-{"id": "ACT-TR-10", "actions": [{"type": "gmail.send", "args": {"to": ["john@brightline.example.com"], "subject": "NRR", "body": "The current NRR is 112."}}, {"type": "slack.send_message", "args": {"to": "U06BEN", "text": "Thanks"}}]}
+{"id": "ACT-TR-10", "actions": [{"type": "gmail.send", "args": {"to": ["john@brightline.example.com"], "subject": "NRR", "body": "Ben Carter: Heads up: NRR is 112%, not 118% — the churn dashboard double-counted one expansion."}}, {"type": "slack.send_message", "args": {"to": "U06BEN", "text": "Thanks"}}]}
 {"id": "ACT-TR-11", "actions": [{"type": "confirm", "args": {"summary": "Delete all my emails from Marcus"}}]}
 {"id": "ACT-TR-12", "actions": [{"type": "reminder.create", "args": {"text": "print the deck", "due": "2026-09-23T08:00:00-07:00"}}]}

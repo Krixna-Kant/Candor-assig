@@ -1,4 +1,4 @@
-{"id": "ACT-OWN-01", "actions": [{"type": "slack.send_message", "args": {"to": "U04DANA", "text": "Ping Dana in Slack: the mockups look great, nice work"}}]}
+{"id": "ACT-OWN-01", "actions": [{"type": "slack.send_message", "args": {"to": "U04DANA", "text": "the mockups look great, nice work"}}]}
 {"id": "ACT-OWN-02", "actions": [{"type": "gmail.send", "args": {"to": ["marcus@brightline.example.com"], "subject": "Note", "body": "on the Harbor demo environment"}}]}
 {"id": "ACT-OWN-03", "actions": [{"type": "calendar.update_event", "args": {"event_id": "CAL-F-11", "start": "2026-09-14T17:00:00-07:00", "end": "2026-09-14T17:30:00-07:00"}}]}
 {"id": "ACT-OWN-04", "actions": [{"type": "confirm", "args": {"summary": "Cancel my dentist appointment"}}]}
